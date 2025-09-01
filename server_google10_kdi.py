@@ -316,6 +316,11 @@ async def ws_handler(request: web.Request):
         if not ws.closed: await ws.close()
     return ws
 
+
+
+
+
+
 app = web.Application(middlewares=[cors_mw])
 app.router.add_get("/ws", ws_handler)
 app.router.add_route("OPTIONS", "/ws", lambda r: web.Response())
