@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Reliable Screen Recorder with Camera PIP</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    #controls {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 100;
+      background: rgba(0,0,0,0.5);
+      padding: 10px;
+      border-radius: 8px;
+      color: white;
+    }
+    #timer { margin-left: 10px; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <div>
+      강의명:
+      <input type="text" id="lectureTitle" value="강의녹화" style="width: 200px;"><br>
+      자동 저장 시간(분):
+      <input type="number" id="autoStopMinutes" value="0" min="0" style="width: 50px;"><br>
+    <div>
+      카메라 선택:
+      <select id="cameraSelect"></select><br>
+      오디오 입력:
+      <select id="audioSelect"></select><br>
+      비트레이트:
+      <select id="bitrateSelect">
+        <option value="500000">500Kbps</option>
+        <option value="1000000">1Mbps</option>
+        <option value="1500000">1.5Mbps</option>
+        <option value="2000000">2Mbps</option>
+        <option value="2500000">2.5Mbps</option>
+        <option value="3000000">3Mbps</option>
+        <option value="3500000">3.5Mbps</option>
+        <option value="4000000">4Mbps</option>
+        <option value="4500000">4.5Mbps</option>
+        <option value="5000000" selected>5Mbps</option>
+      </select>
+    </div>
+    <button onclick="startCapture()">Start</button>
+    <button onclick="pauseRecording()">Pause</button>
+    <button onclick="resumeRecording()">Resume</button>
+    <button onclick="stopCapture()">Stop</button>
+    <span id="timer">00:00</span>
+  </div>
+
+  <script>
+    let screenStream, micStream, cameraStream;
+    let recorder, chunks = [], timerInterval, startTime;
+
+    async function listCameras() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      const audios = devices.filter(d => d.kind === 'audioinput');
+
+      const camSelect = document.getElementById('cameraSelect');
+      camSelect.innerHTML = '';
+      cams.forEach(cam => {
+        const opt = document.createElement('option');
+        opt.value = cam.deviceId;
+        opt.text = cam.label || `Camera ${camSelect.length + 1}`;
+        camSelect.appendChild(opt);
+      });
+
+      const audioSelect = document.getElementById('audioSelect');
+      audioSelect.innerHTML = '';
+      audios.forEach(mic => {
+        const opt = document.createElement('option');
+        opt.value = mic.deviceId;
+        opt.text = mic.label || `Mic ${audioSelect.length + 1}`;
+        audioSelect.appendChild(opt);
+      });
+    }
+
+    async function getSelectedCameraStream() {
+      const deviceId = document.getElementById('cameraSelect').value;
+      return await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } }
+      });
+    }
+
+    async function startCapture() {
+      const bitrate = parseInt(document.getElementById('bitrateSelect').value);
+
+      try {
+        screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      } catch (e) {
+        alert('화면 공유를 허용해야 녹화를 시작할 수 있습니다.');
+        return;
+      }
+
+      try {
+        const audioDeviceId = document.getElementById('audioSelect').value;
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: audioDeviceId } } });
+      } catch (e) {
+        console.warn('마이크 사용 불가');
+        micStream = null;
+      }
+
+      try {
+        cameraStream = await getSelectedCameraStream();
+        const cameraVideo = document.createElement('video');
+        cameraVideo.srcObject = cameraStream;
+        cameraVideo.muted = true;
+        cameraVideo.play();
+        await cameraVideo.requestPictureInPicture();
+      } catch (e) {
+        console.warn('카메라 PIP 시작 실패:', e);
+      }
+
+      const tracks = [...screenStream.getVideoTracks()];
+
+      const audioTracks = [];
+      if (screenStream.getAudioTracks().length > 0) {
+        audioTracks.push(...screenStream.getAudioTracks());
+      }
+      if (micStream && micStream.getAudioTracks().length > 0) {
+        audioTracks.push(...micStream.getAudioTracks());
+      }
+
+      const audioContext = new AudioContext();
+      const destination = audioContext.createMediaStreamDestination();
+
+      audioTracks.forEach(track => {
+        const src = audioContext.createMediaStreamSource(new MediaStream([track]));
+        src.connect(destination);
+      });
+
+      destination.stream.getAudioTracks().forEach(t => tracks.push(t));
+
+      const combinedStream = new MediaStream(tracks);
+
+      recorder = new MediaRecorder(combinedStream, {
+        mimeType: 'video/webm; codecs=vp9',
+        videoBitsPerSecond: bitrate
+      });
+
+      recorder.ondataavailable = (e) => chunks.push(e.data);
+      recorder.onstop = handleStop;
+
+      recorder.start();
+      startTimer();
+
+      const autoStopMinutes = parseInt(document.getElementById('autoStopMinutes').value);
+      if (autoStopMinutes > 0) {
+        setTimeout(() => {
+          if (recorder && recorder.state === 'recording') {
+            stopCapture();
+          }
+        }, autoStopMinutes * 60 * 1000);
+      }
+    }
+
+    function handleStop() {
+      stopTimer();
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const title = document.getElementById('lectureTitle').value || '강의녹화';
+      const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+      const filename = `${title}_${timestamp}.webm`;
+      const a = document.createElement('a');
+
+      a.href = url;
+      a.download = filename;
+      a.click();
+      chunks = [];
+    }
+
+    function stopCapture() {
+      recorder.stop();
+      screenStream.getTracks().forEach(t => t.stop());
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      if (cameraStream) cameraStream.getTracks().forEach(t => t.stop());
+    }
+
+    function pauseRecording() {
+      if (recorder && recorder.state === 'recording') {
+        recorder.pause();
+        stopTimer();
+      }
+    }
+
+    function resumeRecording() {
+      if (recorder && recorder.state === 'paused') {
+        recorder.resume();
+        startTimer();
+      }
+    }
+
+    function startTimer() {
+      startTime = Date.now();
+      timerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
+        const secs = String(elapsed % 60).padStart(2, '0');
+        document.getElementById('timer').textContent = `${mins}:${secs}`;
+      }, 1000);
+    }
+
+    function stopTimer() {
+      clearInterval(timerInterval);
+    }
+
+    window.onload = async () => {
+      try {
+        await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      } catch {}
+      await listCameras();
+    }
+  </script>
+</body>
+</html>

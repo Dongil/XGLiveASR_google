@@ -1,0 +1,42 @@
+{
+  "whisper": {
+    "language": "ko",
+    "task": "transcribe",
+    "temperature": 0,
+    "condition_on_previous_text": true,
+    "no_repeat_ngram_size": 3,
+    "repetition_penalty": 1.2,
+    "log_prob_threshold": -0.6,
+    "compression_ratio_threshold": 1.6,
+    "beam_size": 10,
+    "best_of": 5,
+    "no_speech_threshold": 0.55,
+    "initial_prompt": null
+  },
+  "vad": {
+    "engine": "silero",
+    "threshold_on": 0.28,
+    "threshold_off": 0.25,
+    "window_ms": 400,
+    "pre_speech_ms": 280,
+    "min_speech_ms": 100,
+    "max_silence_ms": 450,
+    "trail_pad_ms": 160,
+    "max_segment_sec": 8,
+    "buffer_flush_length": 30,
+    "flush_timeout": 1.4
+  },
+  "model": {
+    "name": "large-v3",
+    "device": "cuda",
+    "compute_type": "float16"
+  },
+  "translation": {
+    "engine": "",
+    "target_langs": [
+      "en",
+      "ja",
+      "zh"
+    ]
+  }
+}
