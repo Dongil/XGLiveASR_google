@@ -52,6 +52,9 @@ NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "YOUR_NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "YOUR_NAVER_CLIENT_SECRET")
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
+SSL_CertFiles = os.getenv("SSL_CERT_PATH")
+SSL_KeyFiles = os.getenv("SSL_KEY_PATH")
+
 if not GOOGLE_APPLICATION_CREDENTIALS:
     logging.warning("GOOGLE_APPLICATION_CREDENTIALS 환경 변수가 설정되지 않았습니다.")
 
@@ -325,8 +328,8 @@ if __name__ == "__main__":
     
     try:
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ssl_ctx.load_cert_chain(r"C:/code/XGLiveASR_google/secrets/xenoglobal.co.kr-fullchain.pem", r"C:/code/XGLiveASR_google/secrets/newkey.pem")
-        #ssl_ctx.load_cert_chain(r"D:/AutoSet9/server/conf/xenoglobal.co.kr-fullchain.pem", r"D:/AutoSet9/server/conf/newkey.pem")
+        #ssl_ctx.load_cert_chain(r"C:/code/XGLiveASR_google/secrets/xenoglobal.co.kr-fullchain.pem", r"C:/code/XGLiveASR_google/secrets/newkey.pem")
+        ssl_ctx.load_cert_chain(SSL_CertFiles, SSL_KeyFiles)
         logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:9100")
         web.run_app(app, host="0.0.0.0", port=9100, ssl_context=ssl_ctx, access_log=access_logger)
     except FileNotFoundError:
