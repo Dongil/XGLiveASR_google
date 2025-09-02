@@ -333,6 +333,7 @@ if __name__ == "__main__":
     
     try:
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        
         #ssl_ctx.load_cert_chain(r"C:/code/XGLiveASR_google/secrets/xenoglobal.co.kr-fullchain.pem", r"C:/code/XGLiveASR_google/secrets/newkey.pem")
         ssl_ctx.load_cert_chain(SSL_CertFiles, SSL_KeyFiles)
         logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:9500")
