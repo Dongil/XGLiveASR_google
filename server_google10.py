@@ -326,6 +326,16 @@ app.router.add_route("OPTIONS", "/ws", lambda r: web.Response())
 if __name__ == "__main__":
     access_logger = logging.getLogger('aiohttp.access')
     
+
+
+
+
+
+
+
+
+
+    
     try:
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         #ssl_ctx.load_cert_chain(r"C:/code/XGLiveASR_google/secrets/xenoglobal.co.kr-fullchain.pem", r"C:/code/XGLiveASR_google/secrets/newkey.pem")
