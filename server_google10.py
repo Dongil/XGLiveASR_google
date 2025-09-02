@@ -129,6 +129,7 @@ def load_user_config(user_id: str):
                 except json.JSONDecodeError: logging.error(f"사용자 설정 파일({user_config_path})이 손상되었습니다.")
     return cfg
 SAMPLE_RATE = 16000
+
 @web.middleware
 async def cors_mw(request, handler):
     if request.method == "OPTIONS": resp = web.Response(status=200)
@@ -213,8 +214,15 @@ async def ws_handler(request: web.Request):
     async def google_stream_processor():
         nonlocal sentence_buffer
         client, adaptation_client, phrase_set_name = speech.SpeechAsyncClient(), None, None
-        full_transcript = ""
+        
+        # --- [수정] 상태 관리 변수 변경 ---
+        # stable_transcript: KSS에 의해 문장으로 확정되어 브로드캐스팅된 텍스트를 누적
+        # last_interim_transcript: 이전 중간 결과와 현재 중간 결과를 비교하여 새로 추가된 텍스트('delta')를 계산하기 위함
+        stable_transcript = ""
+        last_interim_transcript = ""
+
         try:
+            # 1. STT 설정 준비 (기존과 동일)
             stt_config_from_json = copy.deepcopy(client_config.get("google_stt", {}))
             adaptation_config_data = stt_config_from_json.pop("speech_adaptation", None)
             
@@ -240,6 +248,7 @@ async def ws_handler(request: web.Request):
             
             streaming_config = speech.StreamingRecognitionConfig(config=recognition_config, interim_results=True, single_utterance=True)
             
+            # 2. 오디오 스트림 생성기 (기존과 동일)
             async def audio_stream_generator():
                 yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
                 while True:
@@ -253,50 +262,89 @@ async def ws_handler(request: web.Request):
             logging.info(f"[{log_id}] Starting new Google STT stream (single_utterance=True)...")
             stream = await client.streaming_recognize(requests=audio_stream_generator())
             
+            # 3. Google API로부터 결과 수신 및 처리 (로직 변경)
             async for response in stream:
                 if not response.results or not response.results[0].alternatives: continue
                 result = response.results[0]
                 transcript = result.alternatives[0].transcript
 
+                # --- [핵심 수정] is_final=True (최종 결과) 처리 ---
                 if result.is_final:
-                    final_piece = transcript.strip()
-                    if final_piece:
-                        await send_json({"type": "stt_interim", "text": full_transcript + " " + final_piece})
-                        logging.info(f"[{log_id}] RECV (Final Utterance): {final_piece}")
-                        sentence_buffer += final_piece + " "
-                        sentences = kss.split_sentences(sentence_buffer)
-                        if sentences: # kss가 문장을 하나라도 분리했다면
-                            # 마지막 문장을 제외하고 모두 즉시 전송
-                            if len(sentences) > 1:
-                                for sentence in sentences[:-1]:
-                                    await broadcast_sentence_with_translation(sentence)
-                            
-                            # 마지막 문장이 온전한지 확인 (마침표, 물음표 등으로 끝나는가)
-                            last_sentence = sentences[-1]
-                            if last_sentence.strip() and last_sentence.strip()[-1] in ['.', '?', '!']:
-                                await broadcast_sentence_with_translation(last_sentence)
-                                sentence_buffer = "" # 버퍼를 비워줌
-                            else:
-                                # 온전한 문장이 아니면 다음 발화를 위해 버퍼에 남겨둠
-                                sentence_buffer = last_sentence
+                    # 최종 결과는 단순히 로그로만 기록하고, 버퍼에 남은 내용을 마지막으로 처리
+                    final_text = transcript.strip()
+                    logging.info(f"[{log_id}] RECV [최종 결과]: {final_text}")
+
+                    # 발화가 끝났으므로, 버퍼에 남아있는 텍스트를 강제로 문장으로 처리
+                    if sentence_buffer:
+                        # 마지막 interim 결과 이후 추가된 텍스트가 있는지 확인
+                        if final_text.startswith(last_interim_transcript):
+                            new_part = final_text[len(last_interim_transcript):].strip()
+                            if new_part:
+                                sentence_buffer += " " + new_part
+                        
+                        await broadcast_sentence_with_translation(sentence_buffer)
+                        stable_transcript += sentence_buffer.strip() + " "
+                    
+                    # 다음 발화를 위해 버퍼 및 상태 변수 초기화
+                    sentence_buffer = ""
+                    last_interim_transcript = ""
+                    # 클라이언트 UI 최종 업데이트
+                    await send_json({"type": "stt_interim", "text": stable_transcript})
+                
+                # --- [핵심 수정] is_final=False (중간 결과) 처리 ---
                 else:
-                    await send_json({"type": "stt_interim", "text": full_transcript + " " + transcript})
+                    # 1. 클라이언트의 '타이핑 효과'를 위해 현재까지 확정된 문장 + 현재 인식 중인 문장을 합쳐서 전송
+                    await send_json({"type": "stt_interim", "text": stable_transcript + transcript})
+
+                    # 2. 이전 중간 결과와 비교하여 새로 추가된 텍스트(delta)만 추출
+                    new_text_part = ""
+                    if transcript.startswith(last_interim_transcript):
+                        new_text_part = transcript[len(last_interim_transcript):]
+                    else:
+                        # Google STT가 중간 결과를 크게 수정하면, 버퍼를 현재 텍스트로 초기화
+                        logging.warning(f"[{log_id}] 중간 결과 리셋 감지. 버퍼 초기화.")
+                        sentence_buffer = transcript
+                    
+                    if new_text_part:
+                        sentence_buffer += new_text_part
+                    
+                    # 3. KSS를 사용하여 현재 버퍼에서 완성된 문장이 있는지 확인
+                    sentences = kss.split_sentences(sentence_buffer)
+
+                    # KSS가 문장을 2개 이상으로 분리했다면, 마지막 조각을 제외한 앞부분은 완성된 문장으로 간주
+                    if len(sentences) > 1:
+                        for sentence in sentences[:-1]:
+                            clean_sentence = sentence.strip()
+                            if clean_sentence:
+                                # 완성된 문장을 즉시 번역 및 브로드캐스팅
+                                await broadcast_sentence_with_translation(clean_sentence)
+                                # 확정된 문장은 stable_transcript에 추가
+                                stable_transcript += clean_sentence + " "
+                        
+                        # 버퍼에는 KSS가 분리하고 남은 마지막 조각(아직 완성되지 않은 문장)만 남김
+                        sentence_buffer = sentences[-1]
+                    
+                    # 다음 비교를 위해 현재 중간 결과를 저장
+                    last_interim_transcript = transcript
+
         finally:
             logging.info(f"[{log_id}] Google STT stream finished.")
             if adaptation_client and phrase_set_name:
                 try: adaptation_client.delete_phrase_set(name=phrase_set_name)
                 except Exception as e: logging.warning(f"[{log_id}] Failed to delete Phrase Set: {e}")
-
+    
     await send_json({"type": "info", "text": "connected."})
     google_task = asyncio.create_task(google_stream_manager())
 
     try:
         while not ws.closed:
             msg = await ws.receive()
-            if msg.type == web.WSMsgType.BINARY: await audio_queue.put(msg.data[4:])
+            if msg.type == web.WSMsgType.BINARY: 
+                await audio_queue.put(msg.data[4:])
             elif msg.type == web.WSMsgType.TEXT:
                 data = json.loads(msg.data)
-                if data.get("type") == "get_config": await send_json({"type": "config", "data": client_config})
+                if data.get("type") == "get_config": 
+                    await send_json({"type": "config", "data": client_config})
                 elif data.get("type") == "config":
                     deep_update(client_config, data.get("options", {}))
                     await send_json({"type": "ack", "text": "config applied."})
@@ -330,9 +378,9 @@ if __name__ == "__main__":
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         #ssl_ctx.load_cert_chain(r"C:/code/XGLiveASR_google/secrets/xenoglobal.co.kr-fullchain.pem", r"C:/code/XGLiveASR_google/secrets/newkey.pem")
         ssl_ctx.load_cert_chain(SSL_CertFiles, SSL_KeyFiles)
-        logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:8100")
-        web.run_app(app, host="0.0.0.0", port=8100, ssl_context=ssl_ctx, access_log=access_logger)
+        logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:9500")
+        web.run_app(app, host="0.0.0.0", port=9500, ssl_context=ssl_ctx, access_log=access_logger)
     except FileNotFoundError:
         logging.warning("\n[경고] SSL 인증서 파일을 찾을 수 없습니다. SSL 없이 서버를 시작합니다.")
-        logging.info("[server] Server is now fully ready and listening on ws://0.0.0.0:8100")
-        web.run_app(app, host="0.0.0.0", port=8100, access_log=access_logger)
+        logging.info("[server] Server is now fully ready and listening on ws://0.0.0.0:9500")
+        web.run_app(app, host="0.0.0.0", port=9500, access_log=access_logger)
