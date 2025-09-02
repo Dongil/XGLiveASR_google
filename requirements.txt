@@ -1,0 +1,8 @@
+aiohttp
+deepl
+fastapi
+google-cloud-speech
+kss
+python-dotenv
+uvicorn[standard]
+websockets
