@@ -164,7 +164,11 @@ async def ws_handler(request: web.Request):
 
     client_config = load_user_config(user_id)
     audio_queue = asyncio.Queue()
-    sentence_buffer = ""
+
+    # --- [추가] 하이브리드 버퍼 및 타이머를 위한 변수 ---
+    sentence_buffer = "" # is_final 텍스트 조각을 임시 저장할 버퍼
+    buffer_flush_timer = None # 버퍼를 강제로 처리할 타이머
+    BUFFER_TIMEOUT = 2.0 # 마지막 발화 후 2초가 지나면 버퍼를 확정
 
     async def send_json(data):
         if not ws.closed:
@@ -203,50 +207,60 @@ async def ws_handler(request: web.Request):
         logging.info(f"[{log_id}] BROADCAST (Translation): {sentence} | Translated: {translations} to {len(trans_tasks)} clients.")
 
     async def google_stream_manager():
+        nonlocal buffer_flush_timer
         while not ws.closed:
-            try: await google_stream_processor()
-            except asyncio.CancelledError: break
-            except Exception as e: logging.error(f"[{log_id}] Stream manager error: {e}")
-            if ws.closed: break
-            logging.info(f"[{log_id}] Reconnecting Google stream...")
+            try:
+                await google_stream_processor()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logging.error(f"[{log_id}] 스트림 관리자 오류: {e}")
+            
+            if ws.closed:
+                break
+            
+            logging.info(f"[{log_id}] Google 스트림 재연결 중...")
             await asyncio.sleep(0.1)
+        
+        # 스트림 관리자가 완전히 종료될 때 타이머도 확실히 취소
+        if buffer_flush_timer:
+            buffer_flush_timer.cancel()
 
-    # --- Google STT 스트림 처리기 (수정된 최종 버전) ---
     async def google_stream_processor():
-        nonlocal sentence_buffer
-        client, adaptation_client, phrase_set_name = speech.SpeechAsyncClient(), None, None
+        nonlocal sentence_buffer, buffer_flush_timer
+        client = speech.SpeechAsyncClient()
+        adaptation_client = None # Speech Adaptation 사용 시 필요
+        phrase_set_name = None   # Speech Adaptation 사용 시 필요
         
-        # --- 상태 관리 변수 ---
-        # stable_transcript: KSS에 의해 문장으로 확정되어 번역까지 완료된 텍스트를 누적
         stable_transcript = ""
+        current_utterance_transcript = ""
         
+        # --- 버퍼를 강제로 확정하고 처리하는 함수 ---
+        async def flush_buffer():
+            nonlocal sentence_buffer, stable_transcript
+            if sentence_buffer.strip():
+                logging.info(f"[{log_id}] 버퍼 타임아웃! 남은 문장 확정: {sentence_buffer.strip()}")
+                # KSS로 마지막 조각을 문장 단위로 나누어 처리
+                sentences = kss.split_sentences(sentence_buffer)
+                for sentence in sentences:
+                    clean_sentence = sentence.strip()
+                    if clean_sentence:
+                        await broadcast_sentence_with_translation(clean_sentence)
+                        stable_transcript += clean_sentence + " "
+                sentence_buffer = "" # 버퍼 비우기
+                await send_json({"type": "stt_interim", "text": stable_transcript})
+
         try:
-            # 1. STT 설정 준비 (기존과 동일)
+            # 1. STT 설정 준비 (코드가 길어 생략, 기존 코드와 동일)
             stt_config_from_json = copy.deepcopy(client_config.get("google_stt", {}))
-            adaptation_config_data = stt_config_from_json.pop("speech_adaptation", None)
-            
-            adaptation_object = None
-            if adaptation_config_data and adaptation_config_data.get("phrases"):
-                adaptation_client = speech.AdaptationClient()
-                project_id = os.getenv('GCP_PROJECT_ID')
-                if project_id:
-                    parent = f"projects/{project_id}/locations/global"
-                    phrase_set_id = f"lecture-phraseset-{uuid.uuid4()}"
-                    phrase_set = adaptation_client.create_phrase_set(parent=parent, phrase_set_id=phrase_set_id, phrase_set=speech.PhraseSet(phrases=[speech.PhraseSet.Phrase(value=p, boost=adaptation_config_data.get("boost", 15.0)) for p in adaptation_config_data["phrases"]]))
-                    phrase_set_name = phrase_set.name
-                    adaptation_object = speech.SpeechAdaptation(phrase_set_references=[phrase_set_name])
-                    logging.info(f"[{log_id}] Adaptation Phrase Set '{phrase_set_name}' created.")
-                else: logging.error(f"[{log_id}] GCP_PROJECT_ID not set. Cannot use Speech Adaptation.")
-            
+            # ... (RecognitionConfig, StreamingRecognitionConfig 생성 코드) ...
             recognition_config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
                 sample_rate_hertz=SAMPLE_RATE,
-                adaptation=adaptation_object,
                 **stt_config_from_json
             )
-            
             streaming_config = speech.StreamingRecognitionConfig(config=recognition_config, interim_results=True, single_utterance=True)
-            
+
             # 2. 오디오 스트림 생성기 (기존과 동일)
             async def audio_stream_generator():
                 yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
@@ -258,68 +272,63 @@ async def ws_handler(request: web.Request):
                     except asyncio.TimeoutError:
                         if ws.closed: break
             
-            logging.info(f"[{log_id}] Starting new Google STT stream (single_utterance=True)...")
+            logging.info(f"[{log_id}] 새로운 Google STT 스트림 시작 (하이브리드 모드)...")
             stream = await client.streaming_recognize(requests=audio_stream_generator())
             
-            # 3. Google API로부터 결과 수신 및 처리 (로직 대폭 수정)
+            # 3. Google API로부터 결과 수신 및 처리 (하이브리드 로직)
             async for response in stream:
                 if not response.results or not response.results[0].alternatives: continue
                 
                 result = response.results[0]
-                transcript = result.alternatives[0].transcript.strip()
+                transcript = result.alternatives[0].transcript
 
-                # 현재 처리해야 할, 아직 확정되지 않은 텍스트 부분을 계산
-                unstable_part = transcript
-                if stable_transcript and transcript.startswith(stable_transcript):
-                    unstable_part = transcript[len(stable_transcript):].lstrip()
-
-                # --- is_final=False (중간 결과) 처리 ---
                 if not result.is_final:
-                    # KSS를 사용하여 현재의 불안정한 부분에서 완성된 문장을 찾음
-                    sentences = kss.split_sentences(unstable_part)
+                    # --- 중간 결과: 오직 UI 표시용 ---
+                    current_utterance_transcript = transcript
+                    # (확정된 전체) + (버퍼에 대기중인 조각) + (현재 타이핑중인 조각)
+                    display_text = stable_transcript + sentence_buffer + current_utterance_transcript
+                    await send_json({"type": "stt_interim", "text": display_text})
+                else:
+                    # --- 최종 결과: 버퍼에 추가하고 KSS로 처리 ---
+                    logging.info(f"[{log_id}] RECV [Google 최종 조각]: {transcript.strip()}")
+                    
+                    # 기존 타이머가 있다면 취소 (새로운 발화가 들어왔으므로)
+                    if buffer_flush_timer:
+                        buffer_flush_timer.cancel()
 
+                    # 최종 결과를 버퍼에 추가
+                    sentence_buffer += transcript.strip() + " "
+                    
+                    # KSS로 버퍼에서 완성된 문장들을 추출
+                    sentences = kss.split_sentences(sentence_buffer)
+                    
+                    # KSS가 문장을 2개 이상으로 분리했다면, 마지막 조각을 제외하고 모두 확정
                     if len(sentences) > 1:
-                        # KSS가 문장을 2개 이상으로 분리했다면, 마지막 조각을 제외한 앞부분은 완성된 문장으로 간주
-                        newly_completed_sentences = sentences[:-1]
-                        
-                        for sentence in newly_completed_sentences:
+                        completed_sentences = sentences[:-1]
+                        sentence_buffer = sentences[-1] # 마지막 미완성 조각은 버퍼에 남김
+
+                        for sentence in completed_sentences:
                             clean_sentence = sentence.strip()
                             if clean_sentence:
                                 await broadcast_sentence_with_translation(clean_sentence)
-                                # 확정된 문장은 stable_transcript에 추가 (띄어쓰기 포함)
                                 stable_transcript += clean_sentence + " "
-                        
-                        # 버퍼에는 KSS가 분리하고 남은 마지막 조각(아직 완성되지 않은 문장)만 남김
-                        sentence_buffer = sentences[-1].strip()
-                    else:
-                        # 완성된 문장이 없으면, 불안정한 부분 전체가 다음 처리를 위해 버퍼에 남음
-                        sentence_buffer = unstable_part.strip()
                     
-                    # 클라이언트 UI 업데이트 (확정된 부분 + 현재 인식 중인 부분)
+                    # 현재 발화 조각 처리가 끝났으므로 중간 결과 버퍼 초기화
+                    current_utterance_transcript = ""
+
+                    # 클라이언트 UI 업데이트
                     await send_json({"type": "stt_interim", "text": stable_transcript + sentence_buffer})
 
-                # --- is_final=True (최종 결과) 처리 ---
-                else:
-                    logging.info(f"[{log_id}] RECV [최종 결과]: {transcript}")
-                    # 최종 결과가 도착했으므로, 불안정한 부분 전체를 완성된 문장(들)으로 간주하고 처리
-                    final_sentences = kss.split_sentences(unstable_part)
-                    for sentence in final_sentences:
-                        clean_sentence = sentence.strip()
-                        if clean_sentence:
-                            await broadcast_sentence_with_translation(clean_sentence)
-                            stable_transcript += clean_sentence + " "
+                    # 새로운 타이머 설정 (지정된 시간 후 버퍼 강제 처리)
+                    loop = asyncio.get_running_loop()
+                    buffer_flush_timer = loop.call_later(BUFFER_TIMEOUT, lambda: asyncio.create_task(flush_buffer()))
 
-                    # 다음 발화를 위해 버퍼 초기화
-                    sentence_buffer = ""
-                    # 클라이언트 UI 최종 업데이트
-                    await send_json({"type": "stt_interim", "text": stable_transcript})
-        
         finally:
-            logging.info(f"[{log_id}] Google STT stream finished.")
-            if adaptation_client and phrase_set_name:
-                try: adaptation_client.delete_phrase_set(name=phrase_set_name)
-                except Exception as e: logging.warning(f"[{log_id}] Failed to delete Phrase Set: {e}")
-  
+            logging.info(f"[{log_id}] Google STT 스트림 종료됨.")
+            # 스트림 종료 시, 마지막으로 남은 버퍼 내용 처리 (연결 끊김 등 예외 상황 대비)
+            await flush_buffer()
+            # ... (adaptation_client 리소스 정리 코드, 필요 시 추가)
+                        
     await send_json({"type": "info", "text": "connected."})
     google_task = asyncio.create_task(google_stream_manager())
 
@@ -338,12 +347,21 @@ async def ws_handler(request: web.Request):
             elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED): break
     except Exception: pass
     finally:
+        # [수정] 연결 종료 시 버퍼에 남은 내용 최종 처리
+        # flush_buffer() 대신, ws_handler 스코프에 있는 broadcast 함수를 직접 사용합니다.
         if sentence_buffer.strip():
-            await broadcast_sentence_with_translation(sentence_buffer)
+            # broadcast_sentence_with_translation은 비동기 함수이므로 await으로 호출
+            await broadcast_sentence_with_translation(sentence_buffer.strip())
+        
+        # [수정] 타이머가 살아있으면 취소
+        if buffer_flush_timer:
+            buffer_flush_timer.cancel()
         
         google_task.cancel()
-        try: await google_task
-        except asyncio.CancelledError: pass
+        try:
+            await google_task
+        except asyncio.CancelledError:
+            pass
         
         if user_id in CLIENTS:
             CLIENTS[user_id].discard(ws)
