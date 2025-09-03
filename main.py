@@ -221,6 +221,7 @@ async def ws_handler(request: web.Request):
 
         try:
             # 1. STT 설정 준비 (기존과 동일)
+            # ... (생략) ...
             stt_config_from_json = copy.deepcopy(client_config.get("google_stt", {}))
             recognition_config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -228,7 +229,7 @@ async def ws_handler(request: web.Request):
                 **stt_config_from_json
             )
             streaming_config = speech.StreamingRecognitionConfig(config=recognition_config, interim_results=True, single_utterance=True)
-
+            
             # 2. 오디오 스트림 생성기 (기존과 동일)
             async def audio_stream_generator():
                 yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
