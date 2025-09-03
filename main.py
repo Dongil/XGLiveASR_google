@@ -214,22 +214,34 @@ async def ws_handler(request: web.Request):
     async def google_stream_processor():
         client = speech.SpeechAsyncClient()
         
-        # --- 모든 상태 변수는 이 함수 내에서만 관리 ---
         session_stable_transcript = ""
         utterance_stable_transcript = ""
         utterance_unstable_buffer = ""
 
         try:
-            # 1. STT 설정 준비 (기존과 동일)
-            # ... (생략) ...
+            # 1. STT 설정 준비 (수정된 부분)
             stt_config_from_json = copy.deepcopy(client_config.get("google_stt", {}))
+            
+            # --- [핵심 수정] speech_adaptation을 미리 제거하고 adaptation_object를 생성 ---
+            adaptation_config_data = stt_config_from_json.pop("speech_adaptation", None)
+            adaptation_object = None
+            if adaptation_config_data and adaptation_config_data.get("phrases"):
+                # Speech Adaptation을 사용하는 경우, 관련 클라이언트 및 객체 생성 로직이 필요합니다.
+                # 지금은 사용하지 않더라도 에러 방지를 위해 pop()은 유지합니다.
+                # (실제 사용 시에는 AdaptationClient 관련 코드를 여기에 추가해야 합니다)
+                logging.info(f"[{log_id}] Speech Adaptation phrases found but client logic is disabled in this version.")
+                pass
+
             recognition_config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
                 sample_rate_hertz=SAMPLE_RATE,
+                adaptation=adaptation_object,  # speech_adaptation 대신 adaptation 인자 사용
                 **stt_config_from_json
             )
-            streaming_config = speech.StreamingRecognitionConfig(config=recognition_config, interim_results=True, single_utterance=True)
+            # --- 수정 종료 ---
             
+            streaming_config = speech.StreamingRecognitionConfig(config=recognition_config, interim_results=True, single_utterance=True)
+
             # 2. 오디오 스트림 생성기 (기존과 동일)
             async def audio_stream_generator():
                 yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
@@ -251,7 +263,6 @@ async def ws_handler(request: web.Request):
                 transcript = result.alternatives[0].transcript
 
                 if not result.is_final:
-                    # --- 중간 결과: KSS로 문장 즉시 확정 시도 ---
                     unprocessed_part = transcript
                     if utterance_stable_transcript:
                         unprocessed_part = transcript[len(utterance_stable_transcript):].lstrip()
@@ -270,11 +281,9 @@ async def ws_handler(request: web.Request):
                     else:
                         utterance_unstable_buffer = unprocessed_part
 
-                    # [핵심 서버 수정 1] 클라이언트에는 "미확정 부분"만 보냄
                     await send_json({"type": "stt_interim", "text": utterance_unstable_buffer})
 
                 else:
-                    # --- 최종 결과: 발화의 끝. 상태 초기화 준비 ---
                     logging.info(f"[{log_id}] RECV [Google 최종 발화]: {transcript}")
 
                     final_unprocessed_part = transcript
@@ -292,7 +301,6 @@ async def ws_handler(request: web.Request):
                     utterance_stable_transcript = ""
                     utterance_unstable_buffer = ""
 
-                    # [핵심 서버 수정 2] 발화가 끝났으므로, 미확정 부분을 지우라는 신호를 클라이언트에 보냄
                     await send_json({"type": "stt_interim", "text": ""})
 
         finally:
