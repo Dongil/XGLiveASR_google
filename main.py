@@ -211,38 +211,26 @@ async def ws_handler(request: web.Request):
             logging.info(f"[{log_id}] Reconnecting Google stream...")
             await asyncio.sleep(0.1)
 
-    # --- Google STT 스트림 처리기 (Instant KSS Confirmation Version) ---
     async def google_stream_processor():
-        client, adaptation_client, phrase_set_name = speech.SpeechAsyncClient(), None, None
+        client = speech.SpeechAsyncClient()
         
-        # --- 상태 관리 변수 ---
-        # processed_text_len: KSS에 의해 문장으로 확정되어 처리된 텍스트의 총 길이
-        # stable_display_text: 클라이언트 UI에 보여줄 확정된 전체 텍스트
-        processed_text_len = 0
-        stable_display_text = ""
-        
+        # --- 모든 상태 변수는 이 함수 내에서만 관리 ---
+        session_stable_transcript = ""
+        utterance_stable_transcript = ""
+        utterance_unstable_buffer = ""
+
         try:
             # 1. STT 설정 준비 (기존과 동일)
             stt_config_from_json = copy.deepcopy(client_config.get("google_stt", {}))
-            adaptation_config_data = stt_config_from_json.pop("speech_adaptation", None)
-            
-            adaptation_object = None
-            if adaptation_config_data and adaptation_config_data.get("phrases"):
-                # ... (이 부분은 이전 코드와 동일하므로 생략)
-                pass # 설명을 위해 생략
-            
             recognition_config = speech.RecognitionConfig(
-                # ... (이 부분은 이전 코드와 동일하므로 생략)
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
                 sample_rate_hertz=SAMPLE_RATE,
                 **stt_config_from_json
             )
-            
             streaming_config = speech.StreamingRecognitionConfig(config=recognition_config, interim_results=True, single_utterance=True)
-            
+
             # 2. 오디오 스트림 생성기 (기존과 동일)
             async def audio_stream_generator():
-                # ... (이 부분은 이전 코드와 동일하므로 생략)
                 yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
                 while True:
                     try:
@@ -251,11 +239,10 @@ async def ws_handler(request: web.Request):
                         yield speech.StreamingRecognizeRequest(audio_content=chunk)
                     except asyncio.TimeoutError:
                         if ws.closed: break
-            
-            logging.info(f"[{log_id}] Starting new Google STT stream (single_utterance=True)...")
+
+            logging.info(f"[{log_id}] 새로운 Google STT 스트림 시작 (발화 단위 상태관리 모드)...")
             stream = await client.streaming_recognize(requests=audio_stream_generator())
             
-            # 3. Google API로부터 결과 수신 및 처리 (길이 기반 안정화 로직)
             async for response in stream:
                 if not response.results or not response.results[0].alternatives: continue
                 
@@ -263,67 +250,55 @@ async def ws_handler(request: web.Request):
                 transcript = result.alternatives[0].transcript
 
                 if not result.is_final:
-                    # --- 중간 결과 (is_final=False) ---
-                    
-                    # 1. 전체 transcript에서 아직 처리되지 않은 새로운 부분만 추출
-                    unprocessed_part = transcript[processed_text_len:]
-                    
-                    # 2. 새로운 부분에 대해 KSS 실행
+                    # --- 중간 결과: KSS로 문장 즉시 확정 시도 ---
+                    unprocessed_part = transcript
+                    if utterance_stable_transcript:
+                        unprocessed_part = transcript[len(utterance_stable_transcript):].lstrip()
+
                     sentences = kss.split_sentences(unprocessed_part)
-                    
-                    # 3. KSS가 문장을 2개 이상으로 분리했다면, 문장 확정 처리
+
                     if len(sentences) > 1:
-                        newly_completed_sentences = sentences[:-1]
-                        
-                        for sentence in newly_completed_sentences:
+                        completed_sentences = sentences[:-1]
+                        utterance_unstable_buffer = sentences[-1]
+
+                        for sentence in completed_sentences:
                             clean_sentence = sentence.strip()
                             if clean_sentence:
-                                # 번역 및 브로드캐스트
                                 await broadcast_sentence_with_translation(clean_sentence)
-                                
-                                # 처리된 텍스트 길이를 누적 (원본 텍스트 기준)
-                                # 띄어쓰기를 고려하여 +1 추가
-                                processed_text_len += len(sentence)
-                                
-                                # UI에 보여줄 확정 텍스트에도 추가
-                                stable_display_text += clean_sentence + " "
-                    
-                    # 4. 클라이언트 UI 업데이트: (확정된 텍스트) + (현재 인식 중인 미확정 텍스트)
-                    # 현재 인식 중인 미확정 텍스트는 전체 transcript에서 처리된 부분을 뺀 나머지
-                    unstable_display_text = transcript[processed_text_len:].lstrip()
-                    await send_json({"type": "stt_interim", "text": stable_display_text + unstable_display_text})
+                                utterance_stable_transcript += sentence.strip() + " "
+                    else:
+                        utterance_unstable_buffer = unprocessed_part
+
+                    # [핵심 서버 수정 1] 클라이언트에는 "미확정 부분"만 보냄
+                    await send_json({"type": "stt_interim", "text": utterance_unstable_buffer})
 
                 else:
-                    # --- 최종 결과 (is_final=True) ---
-                    # 역할: 비교를 위한 로그 출력 및 남은 부분 최종 처리
-                    logging.info(f"[{log_id}] RECV [Google 최종 결과]: {transcript}")
+                    # --- 최종 결과: 발화의 끝. 상태 초기화 준비 ---
+                    logging.info(f"[{log_id}] RECV [Google 최종 발화]: {transcript}")
+
+                    final_unprocessed_part = transcript
+                    if utterance_stable_transcript:
+                        final_unprocessed_part = transcript[len(utterance_stable_transcript):].lstrip()
                     
-                    # 1. 마지막으로 남은 미처리 부분을 KSS로 분리하여 모두 처리
-                    final_unprocessed_part = transcript[processed_text_len:].strip()
                     if final_unprocessed_part:
                         final_sentences = kss.split_sentences(final_unprocessed_part)
                         for sentence in final_sentences:
                             clean_sentence = sentence.strip()
                             if clean_sentence:
                                 await broadcast_sentence_with_translation(clean_sentence)
-                                stable_display_text += clean_sentence + " "
-
-                    # 2. 발화가 끝났으므로 상태 변수 초기화 (다음 발화를 위해)
-                    processed_text_len = 0
-                    stable_display_text = ""
                     
-                    # 3. 클라이언트 UI를 최종 확정된 전체 텍스트로 업데이트
-                    #    (이 발화의 전체 텍스트를 보여주기 위해 stable_display_text 대신 transcript 사용)
-                    await send_json({"type": "stt_interim", "text": transcript})
+                    session_stable_transcript += transcript.strip() + " "
+                    utterance_stable_transcript = ""
+                    utterance_unstable_buffer = ""
+
+                    # [핵심 서버 수정 2] 발화가 끝났으므로, 미확정 부분을 지우라는 신호를 클라이언트에 보냄
+                    await send_json({"type": "stt_interim", "text": ""})
 
         finally:
-            logging.info(f"[{log_id}] Google STT stream finished.")
-            # 스트림 종료 시 처리할 내용이 있다면 마지막으로 처리 가능
-            # (is_final 로직에서 대부분 처리되므로 이 부분은 예외 처리용)
-
-            if adaptation_client and phrase_set_name:
-                try: adaptation_client.delete_phrase_set(name=phrase_set_name)
-                except Exception as e: logging.warning(f"[{log-id}] Failed to delete Phrase Set: {e}")
+            logging.info(f"[{log_id}] Google STT 스트림 종료됨.")
+            if utterance_unstable_buffer.strip():
+                logging.info(f"[{log_id}] 스트림 종료, 남은 조각 최종 처리: {utterance_unstable_buffer.strip()}")
+                await broadcast_sentence_with_translation(utterance_unstable_buffer.strip())
 
     await send_json({"type": "info", "text": "connected."})
     google_task = asyncio.create_task(google_stream_manager())
