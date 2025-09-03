@@ -1,4 +1,4 @@
-# server_google10_nokss.py
+# main.py
 import asyncio
 import json
 import os
@@ -14,7 +14,7 @@ import aiohttp
 from aiohttp import web, WSCloseCode
 
 from google.cloud import speech
-#import kss
+import kss
 
 import deepl
 import html
@@ -212,26 +212,37 @@ async def ws_handler(request: web.Request):
             await asyncio.sleep(0.1)
 
     async def google_stream_processor():
-        # [KSS 제거 버전]
         client = speech.SpeechAsyncClient()
         
-        # --- 상태 관리 변수 ---
-        # 한 번의 스트림 연결(최대 5분) 동안 확정된 전체 텍스트
         session_stable_transcript = ""
-        
+        utterance_stable_transcript = ""
+        utterance_unstable_buffer = ""
+
         try:
-            # 1. STT 설정 준비 (speech_adaptation 에러 방지 코드 포함)
+            # 1. STT 설정 준비 (수정된 부분)
             stt_config_from_json = copy.deepcopy(client_config.get("google_stt", {}))
-            stt_config_from_json.pop("speech_adaptation", None) # 에러 방지
             
+            # --- [핵심 수정] speech_adaptation을 미리 제거하고 adaptation_object를 생성 ---
+            adaptation_config_data = stt_config_from_json.pop("speech_adaptation", None)
+            adaptation_object = None
+            if adaptation_config_data and adaptation_config_data.get("phrases"):
+                # Speech Adaptation을 사용하는 경우, 관련 클라이언트 및 객체 생성 로직이 필요합니다.
+                # 지금은 사용하지 않더라도 에러 방지를 위해 pop()은 유지합니다.
+                # (실제 사용 시에는 AdaptationClient 관련 코드를 여기에 추가해야 합니다)
+                logging.info(f"[{log_id}] Speech Adaptation phrases found but client logic is disabled in this version.")
+                pass
+
             recognition_config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
                 sample_rate_hertz=SAMPLE_RATE,
+                adaptation=adaptation_object,  # speech_adaptation 대신 adaptation 인자 사용
                 **stt_config_from_json
             )
+            # --- 수정 종료 ---
+            
             streaming_config = speech.StreamingRecognitionConfig(config=recognition_config, interim_results=True, single_utterance=True)
 
-            # 2. 오디오 스트림 생성기
+            # 2. 오디오 스트림 생성기 (기존과 동일)
             async def audio_stream_generator():
                 yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
                 while True:
@@ -242,7 +253,7 @@ async def ws_handler(request: web.Request):
                     except asyncio.TimeoutError:
                         if ws.closed: break
 
-            logging.info(f"[{log_id}] 새로운 Google STT 스트림 시작 (KSS 미사용 모드)...")
+            logging.info(f"[{log_id}] 새로운 Google STT 스트림 시작 (발화 단위 상태관리 모드)...")
             stream = await client.streaming_recognize(requests=audio_stream_generator())
             
             async for response in stream:
@@ -252,29 +263,52 @@ async def ws_handler(request: web.Request):
                 transcript = result.alternatives[0].transcript
 
                 if not result.is_final:
-                    # --- 중간 결과: 타이핑 효과를 위해 전체 내용을 보냄 ---
-                    display_text = session_stable_transcript + transcript
-                    await send_json({"type": "stt_interim", "text": display_text})
+                    unprocessed_part = transcript
+                    if utterance_stable_transcript:
+                        unprocessed_part = transcript[len(utterance_stable_transcript):].lstrip()
+
+                    sentences = kss.split_sentences(unprocessed_part)
+
+                    if len(sentences) > 1:
+                        completed_sentences = sentences[:-1]
+                        utterance_unstable_buffer = sentences[-1]
+
+                        for sentence in completed_sentences:
+                            clean_sentence = sentence.strip()
+                            if clean_sentence:
+                                await broadcast_sentence_with_translation(clean_sentence)
+                                utterance_stable_transcript += sentence.strip() + " "
+                    else:
+                        utterance_unstable_buffer = unprocessed_part
+
+                    await send_json({"type": "stt_interim", "text": utterance_unstable_buffer})
 
                 else:
-                    # --- 최종 결과: KSS 없이 문장 확정 및 번역 ---
                     logging.info(f"[{log_id}] RECV [Google 최종 발화]: {transcript}")
-                    
-                    final_text = transcript.strip()
-                    if final_text:
-                        # KSS를 사용하지 않고, 받은 transcript 전체를 하나의 문장으로 처리
-                        await broadcast_sentence_with_translation(final_text)
 
-                    # 발화가 끝났으므로, 이번 발화 내용을 세션 전체 내용에 편입
-                    session_stable_transcript += final_text + " "
+                    final_unprocessed_part = transcript
+                    if utterance_stable_transcript:
+                        final_unprocessed_part = transcript[len(utterance_stable_transcript):].lstrip()
                     
-                    # UI 최종 업데이트 (다음 중간 결과를 위해 현재 확정된 전체 내용을 보냄)
-                    await send_json({"type": "stt_interim", "text": session_stable_transcript})
+                    if final_unprocessed_part:
+                        final_sentences = kss.split_sentences(final_unprocessed_part)
+                        for sentence in final_sentences:
+                            clean_sentence = sentence.strip()
+                            if clean_sentence:
+                                await broadcast_sentence_with_translation(clean_sentence)
+                    
+                    session_stable_transcript += transcript.strip() + " "
+                    utterance_stable_transcript = ""
+                    utterance_unstable_buffer = ""
+
+                    await send_json({"type": "stt_interim", "text": ""})
 
         finally:
             logging.info(f"[{log_id}] Google STT 스트림 종료됨.")
-            # 이 버전에서는 스트림 종료 시 별도 처리할 버퍼가 없음
-  
+            if utterance_unstable_buffer.strip():
+                logging.info(f"[{log_id}] 스트림 종료, 남은 조각 최종 처리: {utterance_unstable_buffer.strip()}")
+                await broadcast_sentence_with_translation(utterance_unstable_buffer.strip())
+
     await send_json({"type": "info", "text": "connected."})
     google_task = asyncio.create_task(google_stream_manager())
 
@@ -293,8 +327,8 @@ async def ws_handler(request: web.Request):
             elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED): break
     except Exception: pass
     finally:
-        if sentence_buffer.strip():
-            await broadcast_sentence_with_translation(sentence_buffer)
+        #if sentence_buffer.strip():
+        #    await broadcast_sentence_with_translation(sentence_buffer)
         
         google_task.cancel()
         try: await google_task
@@ -320,9 +354,9 @@ if __name__ == "__main__":
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         #ssl_ctx.load_cert_chain(r"C:/code/XGLiveASR_google/secrets/xenoglobal.co.kr-fullchain.pem", r"C:/code/XGLiveASR_google/secrets/newkey.pem")
         ssl_ctx.load_cert_chain(SSL_CertFiles, SSL_KeyFiles)
-        logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:9600")
-        web.run_app(app, host="0.0.0.0", port=9600, ssl_context=ssl_ctx, access_log=access_logger)
+        logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:9500")
+        web.run_app(app, host="0.0.0.0", port=9500, ssl_context=ssl_ctx, access_log=access_logger)
     except FileNotFoundError:
         logging.warning("\n[경고] SSL 인증서 파일을 찾을 수 없습니다. SSL 없이 서버를 시작합니다.")
-        logging.info("[server] Server is now fully ready and listening on ws://0.0.0.0:9600")
-        web.run_app(app, host="0.0.0.0", port=9600, access_log=access_logger)
+        logging.info("[server] Server is now fully ready and listening on ws://0.0.0.0:9500")
+        web.run_app(app, host="0.0.0.0", port=9500, access_log=access_logger)
