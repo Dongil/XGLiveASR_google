@@ -1,4 +1,4 @@
-<!-- index_kdi.php -->
+<!-- index_kdi_nokss.php -->
 <!doctype html>
 <html lang="ko">
 <head>
@@ -474,47 +474,46 @@
     
 //var remainingText = '';	
 
-    // sttInterimHandler: 서버가 보내준 전체 텍스트를 interim 문단에 표시
+    // [KSS 미사용 버전에 맞는 최종 수정]
+    // sttInterimHandler는 이전과 동일하게 사용합니다.
     function sttInterimHandler(data) {
         const container = logElements[0];
         let p = container.querySelector('p.interim');
 
-        // 서버가 빈 텍스트를 보내면(발화 종료 신호) 회색 문단을 제거
-        if (!data.text.trim()) {
-            if (p) p.remove();
-            return;
-        }
-
-        // 회색 문단이 없으면 새로 생성
         if (!p) {
             p = document.createElement('p');
             p.classList.add('interim');
             container.appendChild(p);
         }
         
-        // 서버가 보내준 누적 텍스트를 그대로 표시
         p.textContent = data.text;
+
+        // 텍스트가 비어있고, 확정된 문장만 있을 때 interim 태그가 남는 것을 방지
+        if (!data.text.trim() && container.querySelectorAll('p:not(.interim)').length > 0) {
+             if (container.contains(p)) p.remove();
+        }
+        
         container.scrollTop = container.scrollHeight;
     }
 
-    // sttFinalHandler: 최종 문장을 추가하고, interim 문단을 비움
+    // [KSS 미사용 버전에 맞는 최종 수정] sttFinalHandler
     function sttFinalHandler(data) {
         const container = logElements[0];
         const { sentence_id, text } = data;
 
         // 1. 기존의 interim 문단이 있다면 내용을 비워둠.
-        //    (바로 다음에 올 interim 메시지가 확정된 전체 내용으로 채워줄 것임)
+        //    (바로 다음에 올 stt_interim 메시지가 확정된 전체 내용으로 다시 채워줄 것임)
         const interimP = container.querySelector('p.interim');
         if (interimP) {
-            interimP.textContent = ''; 
+            interimP.textContent = ''; // remove() 대신 내용을 비웁니다.
         }
 
-        // 2. 최종 문장을 위한 새로운 p 태그를 생성하여 추가
+        // 2. 최종 문장을 위한 새로운 p 태그를 생성
         const p = document.createElement('p');
-        p.dataset.id = sentence_id; // 고유 ID 부여
+        p.dataset.id = sentence_id;
         p.textContent = text;
         
-        // 3. interim 문단이 있다면 그 앞에 삽입, 없다면 맨 뒤에 추가
+        // 3. interim 문단이 있다면 그 앞에 삽입하여 순서를 맞추고, 없다면 맨 뒤에 추가
         if (interimP) {
             container.insertBefore(p, interimP);
         } else {
