@@ -116,8 +116,16 @@ async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcas
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logging.error(f"[{log_id}] [STT] 스트림 매니저 오류 발생: {e}")
+            # --- [수정 시작] Audio Timeout Error는 INFO 레벨로, 그 외의 에러만 ERROR로 처리 ---
+            error_str = str(e)
+            if "Audio Timeout" in error_str:
+                logging.info(f"[{log_id}] [STT] 오디오 입력이 없어 스트림이 타임아웃되었습니다. (정상 동작)")
+            else:
+                logging.error(f"[{log_id}] [STT] 스트림 매니저 오류 발생: {e}")
+            # --- [수정 종료] ---
+        
         if ws.closed:
             break
+        
         logging.warning(f"[{log_id}] [STT] 스트림 재연결 시도...")
         await asyncio.sleep(0.1)
