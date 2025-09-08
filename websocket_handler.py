@@ -60,7 +60,7 @@ async def ws_handler(request: web.Request):
             await asyncio.gather(*stt_tasks, return_exceptions=True)
         logging.info(f"[{log_id}] [Broadcast] STT 전송 (to {len(stt_tasks)} clients): \"{sentence}\"")
 
-        trans_cfg = client_config.get("translation", {}), []
+        trans_cfg = client_config.get("translation", {})
         engine_name, target_langs = trans_cfg.get("engine"), trans_cfg.get("target_langs", [])
 
         if not (engine_name and target_langs): return
@@ -78,7 +78,6 @@ async def ws_handler(request: web.Request):
         if not translator:
             logging.warning(f"[{log_id}] [Translate] '{engine_name}' 번역기를 사용할 수 없거나 설정이 누락되었습니다.")
             return
-
             
         translations = await asyncio.gather(*[translator.translate(sentence, lang) for lang in target_langs])
         
