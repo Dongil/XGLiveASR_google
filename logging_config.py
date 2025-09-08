@@ -1,6 +1,7 @@
 # logging_config.py
 
 import logging
+import atexit
 
 def setup_logging():
     """서버 전체에서 사용할 루트 로거를 설정합니다."""
@@ -29,4 +30,5 @@ def setup_logging():
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    logging.info("--- 서버 시작: 콘솔 및 파일 로깅이 활성화되었습니다. ---")
+    # --- [추가] 서버 정상 종료 시 로그를 남기기 위한 핸들러 등록 ---
+    atexit.register(logging.info, "--- 서버가 정상적으로 종료되었습니다. ---")

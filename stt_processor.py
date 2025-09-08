@@ -26,13 +26,13 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
             # Speech Adaptation을 사용하는 경우, 관련 클라이언트 및 객체 생성 로직이 필요합니다.
             # 지금은 사용하지 않더라도 에러 방지를 위해 pop()은 유지합니다.
             # (실제 사용 시에는 AdaptationClient 관련 코드를 여기에 추가해야 합니다)
-            logging.info(f"[{log_id}] Speech Adaptation phrases found but client logic is disabled in this version.")
+            logging.info(f"[{log_id}] [STT] Speech Adaptation 구문이 감지되었으나, 현재 버전에서는 비활성화 상태입니다.")
             pass
 
         recognition_config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=SAMPLE_RATE,
-            adaptation=adaptation_object,  # speech_adaptation 대신 adaptation 인자 사용
+            adaptation=adaptation_object, 
             **stt_config_from_json
         )
         # --- 수정 종료 ---
@@ -50,7 +50,7 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
                 except asyncio.TimeoutError:
                     if ws.closed: break
 
-        logging.info(f"[{log_id}] 새로운 Google STT 스트림 시작 (발화 단위 상태관리 모드)...")
+        logging.info(f"[{log_id}] [STT] Google STT 스트림 시작 (발화 단위 모드).")
         stream = await client.streaming_recognize(requests=audio_stream_generator())
         
         async for response in stream:
@@ -81,7 +81,7 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
                 await send_json_func({"type": "stt_interim", "text": utterance_unstable_buffer})
 
             else:
-                logging.info(f"[{log_id}] RECV [Google 최종 발화]: {transcript}")
+                logging.info(f"[{log_id}] [STT] 최종 발화 수신: \"{transcript}\"")
 
                 final_unprocessed_part = transcript
                 if utterance_stable_transcript:
@@ -101,10 +101,11 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
                 await send_json_func({"type": "stt_interim", "text": ""})
 
     finally:
-        logging.info(f"[{log_id}] Google STT 스트림 종료됨.")
+        logging.info(f"[{log_id}] [STT] Google STT 스트림 종료.")
         if utterance_unstable_buffer.strip():
-            logging.info(f"[{log_id}] 스트림 종료, 남은 조각 최종 처리: {utterance_unstable_buffer.strip()}")
-            await broadcast_func(utterance_unstable_buffer.strip())
+            final_sentence = utterance_unstable_buffer.strip()
+            logging.info(f"[{log_id}] [STT] 스트림 종료 후 남은 버퍼 처리: \"{final_sentence}\"")
+            await broadcast_func(final_sentence)
 
 
 async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func):
@@ -115,8 +116,8 @@ async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcas
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logging.error(f"[{log_id}] Stream manager error: {e}")
+            logging.error(f"[{log_id}] [STT] 스트림 매니저 오류 발생: {e}")
         if ws.closed:
             break
-        logging.info(f"[{log_id}] Reconnecting Google stream...")
+        logging.warning(f"[{log_id}] [STT] 스트림 재연결 시도...")
         await asyncio.sleep(0.1)

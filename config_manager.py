@@ -21,7 +21,7 @@ def load_user_config(user_id: str):
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             try: deep_update(cfg, json.load(f))
-            except json.JSONDecodeError: logging.error(f"{CONFIG_PATH} 파일이 손상되었습니다.")
+            except json.JSONDecodeError: logging.error(f"[Config] 전역 설정 파일({CONFIG_PATH})이 손상되었습니다.")
     if user_id:
         # user_config_path = os.path.join(USER_CONFIG_DIR, f"config_{user_id}.json")
         user_config_path = os.path.join(USER_CONFIG_DIR, f"config_google.json")
@@ -29,6 +29,9 @@ def load_user_config(user_id: str):
             with open(user_config_path, "r", encoding="utf-8") as f:
                 try:
                     deep_update(cfg, json.load(f))
-                    logging.info(f"[{user_id}] Loaded user-specific config from {user_config_path}")
-                except json.JSONDecodeError: logging.error(f"사용자 설정 파일({user_config_path})이 손상되었습니다.")
+                    # --- [수정] 로그 메시지 형식 통일 ---
+                    logging.info(f"[{user_id}] [Config] 사용자 설정 로드 완료: {user_config_path}")
+                except json.JSONDecodeError: 
+                    # --- [수정] 로그 메시지에 접두사 추가 ---
+                    logging.error(f"[{user_id}] [Config] 사용자 설정 파일({user_config_path})이 손상되었습니다.")
     return cfg

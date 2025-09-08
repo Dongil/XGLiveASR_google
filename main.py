@@ -13,6 +13,9 @@ import config
 # 로깅 설정 실행
 setup_logging()
 
+# --- [수정] 서버 시작 로그 위치 변경 및 내용 구체화 ---
+logging.info("--- 서버 초기화 시작: 콘솔 및 파일 로깅 활성화 ---")
+
 # GOOGLE_APPLICATION_CREDENTIALS 환경 변수 확인 로그
 if not config.GOOGLE_APPLICATION_CREDENTIALS:
     logging.warning("GOOGLE_APPLICATION_CREDENTIALS 환경 변수가 설정되지 않았습니다.")
@@ -41,12 +44,17 @@ if __name__ == "__main__":
     app = create_app()
     access_logger = logging.getLogger('aiohttp.access')
     
+    # --- [추가] 포트 번호를 변수로 관리하여 로그에 활용 ---
+    PORT = 9500
+    
     try:
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_ctx.load_cert_chain(config.SSL_CertFiles, config.SSL_KeyFiles)
-        logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:9500")
-        web.run_app(app, host="0.0.0.0", port=9500, ssl_context=ssl_ctx, access_log=access_logger)
+        # --- [수정] 서버 준비 완료 로그 개선 ---
+        logging.info(f"[Server] SSL 설정 완료. wss://0.0.0.0:{PORT} 에서 연결 대기 중...")
+        web.run_app(app, host="0.0.0.0", port=PORT, ssl_context=ssl_ctx, access_log=access_logger)
     except (FileNotFoundError, TypeError):
-        logging.warning("\n[경고] SSL 인증서 파일을 찾을 수 없거나 경로가 설정되지 않았습니다. SSL 없이 서버를 시작합니다.")
-        logging.info("[server] Server is now fully ready and listening on ws://0.0.0.0:9500")
-        web.run_app(app, host="0.0.0.0", port=9500, access_log=access_logger)
+        # --- [수정] SSL 실패 및 일반 시작 로그 개선 ---
+        logging.warning("[Server] SSL 인증서 파일을 찾을 수 없거나 경로가 잘못되었습니다. SSL 없이 서버를 시작합니다.")
+        logging.info(f"[Server] ws://0.0.0.0:{PORT} 에서 연결 대기 중...")
+        web.run_app(app, host="0.0.0.0", port=PORT, access_log=access_logger)
