@@ -1,0 +1,122 @@
+# stt_processor.py
+
+import asyncio
+import logging
+import copy
+from google.cloud import speech
+import kss
+from config import SAMPLE_RATE
+
+async def google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func):
+    """Google STT 스트림을 처리하고 결과를 브로드캐스팅하는 코어 로직"""
+    client = speech.SpeechAsyncClient()
+    
+    session_stable_transcript = ""
+    utterance_stable_transcript = ""
+    utterance_unstable_buffer = ""
+
+    try:
+        # 1. STT 설정 준비 (수정된 부분)
+        stt_config_from_json = copy.deepcopy(client_config.get("google_stt", {}))
+        
+        # --- [핵심 수정] speech_adaptation을 미리 제거하고 adaptation_object를 생성 ---
+        adaptation_config_data = stt_config_from_json.pop("speech_adaptation", None)
+        adaptation_object = None
+        if adaptation_config_data and adaptation_config_data.get("phrases"):
+            # Speech Adaptation을 사용하는 경우, 관련 클라이언트 및 객체 생성 로직이 필요합니다.
+            # 지금은 사용하지 않더라도 에러 방지를 위해 pop()은 유지합니다.
+            # (실제 사용 시에는 AdaptationClient 관련 코드를 여기에 추가해야 합니다)
+            logging.info(f"[{log_id}] Speech Adaptation phrases found but client logic is disabled in this version.")
+            pass
+
+        recognition_config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=SAMPLE_RATE,
+            adaptation=adaptation_object,  # speech_adaptation 대신 adaptation 인자 사용
+            **stt_config_from_json
+        )
+        # --- 수정 종료 ---
+        
+        streaming_config = speech.StreamingRecognitionConfig(config=recognition_config, interim_results=True, single_utterance=True)
+
+        # 2. 오디오 스트림 생성기 (기존과 동일)
+        async def audio_stream_generator():
+            yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(audio_queue.get(), timeout=1.0)
+                    if chunk is None: break
+                    yield speech.StreamingRecognizeRequest(audio_content=chunk)
+                except asyncio.TimeoutError:
+                    if ws.closed: break
+
+        logging.info(f"[{log_id}] 새로운 Google STT 스트림 시작 (발화 단위 상태관리 모드)...")
+        stream = await client.streaming_recognize(requests=audio_stream_generator())
+        
+        async for response in stream:
+            if not response.results or not response.results[0].alternatives: continue
+            
+            result = response.results[0]
+            transcript = result.alternatives[0].transcript
+
+            if not result.is_final:
+                unprocessed_part = transcript
+                if utterance_stable_transcript:
+                    unprocessed_part = transcript[len(utterance_stable_transcript):].lstrip()
+
+                sentences = kss.split_sentences(unprocessed_part)
+
+                if len(sentences) > 1:
+                    completed_sentences = sentences[:-1]
+                    utterance_unstable_buffer = sentences[-1]
+
+                    for sentence in completed_sentences:
+                        clean_sentence = sentence.strip()
+                        if clean_sentence:
+                            await broadcast_func(clean_sentence)
+                            utterance_stable_transcript += sentence.strip() + " "
+                else:
+                    utterance_unstable_buffer = unprocessed_part
+
+                await send_json_func({"type": "stt_interim", "text": utterance_unstable_buffer})
+
+            else:
+                logging.info(f"[{log_id}] RECV [Google 최종 발화]: {transcript}")
+
+                final_unprocessed_part = transcript
+                if utterance_stable_transcript:
+                    final_unprocessed_part = transcript[len(utterance_stable_transcript):].lstrip()
+                
+                if final_unprocessed_part:
+                    final_sentences = kss.split_sentences(final_unprocessed_part)
+                    for sentence in final_sentences:
+                        clean_sentence = sentence.strip()
+                        if clean_sentence:
+                            await broadcast_func(clean_sentence)
+                
+                session_stable_transcript += transcript.strip() + " "
+                utterance_stable_transcript = ""
+                utterance_unstable_buffer = ""
+
+                await send_json_func({"type": "stt_interim", "text": ""})
+
+    finally:
+        logging.info(f"[{log_id}] Google STT 스트림 종료됨.")
+        if utterance_unstable_buffer.strip():
+            logging.info(f"[{log_id}] 스트림 종료, 남은 조각 최종 처리: {utterance_unstable_buffer.strip()}")
+            await broadcast_func(utterance_unstable_buffer.strip())
+
+
+async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func):
+    """STT 프로세서를 관리하고, 연결이 끊겼을 때 재연결을 시도합니다."""
+    while not ws.closed:
+        try:
+            await google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"[{log_id}] Stream manager error: {e}")
+        if ws.closed:
+            break
+        logging.info(f"[{log_id}] Reconnecting Google stream...")
+        await asyncio.sleep(0.1)
