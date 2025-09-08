@@ -20,11 +20,14 @@ async def ws_handler(request: web.Request):
     ws = web.WebSocketResponse(max_msg_size=8 * 1024 * 1024)
     await ws.prepare(request)
     
+    # --- [수정 시작] id와 user 파라미터를 모두 읽도록 변경 ---
     user_id_raw = request.query.get("id", "")
-    if user_id_raw:
-        user_id = re.sub(r'[^a-zA-Z0-9_\-]', '', user_id_raw)
-    else:
-        user_id = f"anonymous_{str(uuid.uuid4().hex)[:8]}"
+    user_id = re.sub(r'[^a-zA-Z0-9_\-]', '', user_id_raw) if user_id_raw else f"anonymous_{str(uuid.uuid4().hex)[:8]}"
+    
+    # 'user' 파라미터를 읽고, 없으면 None으로 설정
+    user_group_raw = request.query.get("user", "")
+    user_group = re.sub(r'[^a-zA-Z0-9_\-]', '', user_group_raw) if user_group_raw else None
+    # --- [수정 종료] ---
 
     if user_id not in CLIENTS:
         CLIENTS[user_id] = set()
@@ -32,7 +35,8 @@ async def ws_handler(request: web.Request):
 
     # --- [수정] log_id 생성 로직을 단순화하고, 첫 연결 로그를 개선 ---
     client_count = len(CLIENTS[user_id])
-    log_id = f"{user_id} ({client_count})"
+    log_id_base = f"{user_id}" + (f"/{user_group}" if user_group else "")
+    log_id = f"{log_id_base} ({client_count})"
     logging.info(f"[{log_id}] 클라이언트 연결됨 (from {request.remote}). '{user_id}' 그룹의 총 클라이언트: {client_count}명")
 
     client_config = load_user_config(user_id)
@@ -48,6 +52,11 @@ async def ws_handler(request: web.Request):
                 logging.error(f"[{log_id}] 클라이언트로 JSON 전송 중 오류 발생: {e}")
 
     async def broadcast_sentence_with_translation(sentence: str):
+        # ... (로직 변경 없음, 여기에서 user_group 변수를 사용하여 동적 키 로딩 로직을 추가할 수 있습니다) ...
+        # 예를 들어:
+        # deepl_key = get_deepl_key_for_user(user_group) or config.DEEPL_API_KEY
+        # translator = DeepLTranslator(deepl_key)
+
         sentence = sentence.strip()
         if not sentence: return
         
@@ -71,6 +80,20 @@ async def ws_handler(request: web.Request):
             if engine_name == 'deepl' and config.DEEPL_API_KEY != "YOUR_DEEPL_API_KEY": translator = DeepLTranslator(config.DEEPL_API_KEY)
             elif engine_name == 'papago' and config.NAVER_CLIENT_ID != "YOUR_NAVER_CLIENT_ID": translator = PapagoTranslator(config.NAVER_CLIENT_ID, config.NAVER_CLIENT_SECRET)
             elif engine_name == 'google' and config.GOOGLE_APPLICATION_CREDENTIALS: translator = GoogleTranslator()
+            
+            # 동적으로 키 로딩하는 로직 예시 (구현 필요)
+            # if engine_name == 'deepl':
+            #     # deepl_api_key = find_key_for(user_group, 'deepl') or config.DEEPL_API_KEY
+            #     translator = DeepLTranslator(config.DEEPL_API_KEY)
+            # elif engine_name == 'papago':
+            #     # client_id, client_secret = find_keys_for(user_group, 'papago') or (config.NAVER_CLIENT_ID, config.NAVER_CLIENT_SECRET)
+            #     translator = PapagoTranslator(config.NAVER_CLIENT_ID, config.NAVER_CLIENT_SECRET)
+            # elif engine_name == 'google':
+            #     # credentials_path = find_path_for(user_group, 'google') or config.GOOGLE_APPLICATION_CREDENTIALS
+            #     # 여기서 동적으로 인증 정보를 바꾸는 로직은 복잡하므로 우선 기본값을 사용합니다.
+            #     if config.GOOGLE_APPLICATION_CREDENTIALS:
+            #         translator = GoogleTranslator()
+
         except Exception as e: 
             logging.error(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화 실패: {e}")
             return # 번역기 생성 실패 시 더 이상 진행하지 않음

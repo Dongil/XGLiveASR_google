@@ -733,10 +733,24 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+        // --- [수정 시작] id와 user 파라미터를 모두 읽어서 wsUrl을 동적으로 생성 ---
         try {
             const params = new URLSearchParams(window.location.search);
-            if (params.has('id')) wsUrlEl.value = `${wsUrlEl.value}?id=${encodeURIComponent(params.get('id'))}`;
-        } catch (e) { console.error("URL param error:", e); }
+            const wsParams = new URLSearchParams(); // 웹소켓 연결용 파라미터 객체 생성
+            
+            if (params.has('id')) {
+                wsParams.set('id', params.get('id'));
+            }
+            if (params.has('user')) {
+                wsParams.set('user', params.get('user'));
+            }
+
+            const wsQueryString = wsParams.toString();
+            if (wsQueryString) {
+                wsUrlEl.value = `${wsUrlEl.value}?${wsQueryString}`;
+            }
+        } catch (e) { console.error("URL 파라미터 처리 중 오류:", e); }
+        // --- [수정 종료] ---
 
         listDevices(); 
         updateTranslationTitles();
