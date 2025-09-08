@@ -1,3 +1,4 @@
+<!-- index_google8.php -->
 <!doctype html>
 <html lang="ko">
 <head>
@@ -311,10 +312,7 @@
     let mediaRecorder = null;
     let recordedChunks = [];
     let recordingStarted = false;
-    
-    // [추가] Final 처리 후 남은 텍스트 조각을 보관하는 변수
-    let remainingText = '';
-
+   
     // --- UI/UX Helper Functions ---
     const W_BREAKPOINT = 900;
     const H_BREAKPOINT = 500;
@@ -476,108 +474,76 @@
     
 //var remainingText = '';	
 
-	// [수정] sttInterimHandler (단순화된 원본 로직)
-	function sttInterimHandler(data) {
-		console.log(`[RECV] Interim: "${data.text}"`);
-		const container = logElements[0];
-		let p = container.querySelector('p.interim');
-		if (!p) {
-			console.log("  -> Interim 문단이 없어 새로 생성합니다.");
-			p = document.createElement('p');
-			p.classList.add('interim');
-			container.appendChild(p);
-		}
-		console.log(`  -> Interim 문단 내용을 "${data.text}" (으)로 업데이트합니다.`);
-		p.textContent = remainingText + data.text;
-		container.scrollTop = container.scrollHeight;
-	}
+    // [최종 수정] sttInterimHandler: 미확정 텍스트를 표시/제거하는 역할만 수행
+    function sttInterimHandler(data) {
+        const container = logElements[0];
+        let p = container.querySelector('p.interim');
 
+        // 서버가 빈 텍스트를 보내면 회색 문단을 완전히 제거
+        if (!data.text.trim()) {
+            if (p) p.remove();
+            return;
+        }
 
-	// [수정] sttFinalHandler (sentence_id 기반 업데이트 로직)
-	function sttFinalHandler(data) {
-		console.log(`[RECV] Final: "${data.text}" (ID: ${data.sentence_id})`);
-		const container = logElements[0];
-		const oldInterim = container.querySelector('p.interim');
-		let currentInterimText = '';		
-		remainingText = '';
+        // 회색 문단이 없으면 새로 생성
+        if (!p) {
+            p = document.createElement('p');
+            p.classList.add('interim');
+            container.appendChild(p);
+        }
+        
+        // 내용 업데이트 및 스크롤
+        p.textContent = data.text;
+        container.scrollTop = container.scrollHeight;
+    }
 
-		if(oldInterim) {
-			// 기존 InterimText를 임시장소에 저장
-			currentInterimText = oldInterim.textContent.trim();	
-			console.log(`  -> 임시변수에 "${currentInterimText}" 입력`);			
-			console.log("  -> 기존 Interim 문단을 제거합니다.");
-			oldInterim.remove();
-		}
-		
-		const finalText = data.text.trim();
-		console.log(`  -> 수신된 Final: "${finalText}"`);		
+    // [최종 수정] sttFinalHandler: 최종 문장을 추가하는 역할만 수행
+    function sttFinalHandler(data) {
+        const container = logElements[0];
+        const { sentence_id, text } = data;
 
-		// sentence_id를 기준으로 기존 문단(p)을 찾음
-		let p = container.querySelector(`p[data-id="${data.sentence_id}"]`);
-		
-		if (p) {
-			// 있으면, 내용을 업데이트
-			console.log(`  -> ID(${data.sentence_id})가 일치하는 기존 문단을 찾아 내용을 "${data.text}" (으)로 업데이트합니다.`);
-			p.textContent = data.text;
-		} else {
-			// 없으면, 새로 생성
-			console.log(`  -> ID(${data.sentence_id})가 일치하는 문단이 없어 새로 생성합니다.`);
-			p = document.createElement('p');
-			p.dataset.id = data.sentence_id;
-			p.textContent = data.text;
-			container.appendChild(p);
-		}
-		
-	/*
-	// ===== 사용 예시 =====
-	const A = "지금 저는 창신대학교에 설치되어 있는 AI 음성인식 시스템을 통해서 실시간으로. 정해진 언어로.";
-	const B = "지금 저는 창신대학교에 설치되어 있는 AI 음성인식 시스템을 통해서 실시간으로.자막 실시간으로 음성을 인식을 하고.";
+        // 기존의 회색 문단은 interimHandler가 지워줄 것이므로 여기서는 신경쓰지 않음.
+        // ID를 기준으로 문단을 찾아보고 없으면 새로 생성.
+        let p = container.querySelector(`p[data-id="${sentence_id}"]`);
+        if (!p) {
+            p = document.createElement('p');
+            p.dataset.id = sentence_id;
 
-	const out = removeFrontOverlap(A, B);
-	// out.result === "정해진 언어로."
-	console.log(out);
-	*/			
-		
-		if (currentInterimText) {
-			/*
-			if (currentInterimText.startsWith(finalText)) {
-				remainingText = currentInterimText.substring(finalText.length).trim();
-			} else {
-				remainingText = currentInterimText;
-			}
-			*/
-			remainingText = removeFrontOverlap(currentInterimText, finalText).result;
-			
-			if (remainingText) {
-				let p2 = container.querySelector('p.interim');
-				if (!p2) {
-					console.log("  -> Interim 문단이 Final에서 제거되어 남아있는 문자를 위해 새로 생성합니다.");
-					p2 = document.createElement('p');
-					p2.classList.add('interim');
-					container.appendChild(p2);
-				}
-				console.log(`  -> 잔여 텍스트를 새로운 P에 넣고 Interim 문단 내용을 "${remainingText}" (으)로 업데이트합니다.`);
-				p2.textContent = remainingText;
-			}
-		}			
-
-		if (data.text) {
-			container.closest('.log-container-wrapper').querySelector('.log-header').classList.add('has-content');
-		}
-		container.scrollTop = container.scrollHeight;
-	}
+            // 새로 생성할 때, 기존의 interim 문단이 있다면 그 앞에 삽입하여 순서를 맞춤
+            const interimP = container.querySelector('p.interim');
+            if (interimP) {
+                container.insertBefore(p, interimP);
+            } else {
+                container.appendChild(p);
+            }
+        }
+        
+        p.textContent = text;
+        
+        // 내용이 추가되었으므로 다운로드 버튼 활성화
+        if (text.trim()) {
+            container.closest('.log-container-wrapper').querySelector('.log-header').classList.add('has-content');
+        }
+        
+        // 스크롤
+        container.scrollTop = container.scrollHeight;
+    }
 
     function translationHandler(data) {
         const { sentence_id, translations } = data;
         
         translations.forEach((transText, i) => {
-            const container = logElements[i + 1];
-            if (!container || !transText) return;
+          const container = logElements[i + 1];
+          if (!container || !transText) return;
 
-            const p = document.createElement('p');
-            p.dataset.id = sentence_id;
-            p.textContent = transText;
-            container.appendChild(p);
+          // [수정 권장] ID를 기반으로 찾아보고, 없으면 추가하는 것이 더 안정적입니다.
+          let p = container.querySelector(`p[data-id="${sentence_id}"]`);
+          if (!p) {
+              p = document.createElement('p');
+              p.dataset.id = sentence_id;
+              container.appendChild(p);
+          }
+          p.textContent = transText;
             
             const logHeader = container.closest('.log-container-wrapper').querySelector('.log-header');
             logHeader.classList.add('has-content');
@@ -685,7 +651,7 @@
         btnStart.disabled = true;
         btnStop.disabled = false;
         bytesSent = 0; seq = 0; 
-		remainingText = '';
+		//remainingText = '';
         clearLogs(); 
         clearSystemLog();
         if (controlsCard.classList.contains('overlay-visible')) controlsCard.classList.remove('overlay-visible');

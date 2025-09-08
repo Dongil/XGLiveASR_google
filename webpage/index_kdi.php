@@ -788,7 +788,7 @@
         showQrBtn.onclick = () => {
             const currentUrl = new URL(window.location.href);
             const userId = currentUrl.searchParams.get('id');
-            const viewerPageName = 'index_viewer_google_1.html'; // 공통 뷰어 페이지
+            const viewerPageName = 'index_viewer_google_2.html'; // 공통 뷰어 페이지
             const viewerUrl = `${currentUrl.origin}${currentUrl.pathname.substring(0, currentUrl.pathname.lastIndexOf('/'))}/${viewerPageName}${userId ? '?id=' + encodeURIComponent(userId) : ''}`;
             
             if (qrCodeContainer) {
