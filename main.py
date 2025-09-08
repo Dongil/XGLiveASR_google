@@ -1,4 +1,4 @@
-# your_project/main.py
+# main.py
 
 import ssl
 import logging
