@@ -355,29 +355,15 @@ app = web.Application(middlewares=[cors_mw])
 app.router.add_get("/ws", ws_handler)
 app.router.add_route("OPTIONS", "/ws", lambda r: web.Response())
 
-# if __name__ == "__main__":
-#     access_logger = logging.getLogger('aiohttp.access')
-    
-#     try:
-#         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-#         ssl_ctx.load_cert_chain(r"D:/AutoSet9/server/conf/xenoglobal.co.kr-fullchain.pem", r"D:/AutoSet9/server/conf/newkey.pem")
-#         logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:8100")
-#         web.run_app(app, host="0.0.0.0", port=8100, ssl_context=ssl_ctx, access_log=access_logger)
-#     except FileNotFoundError:
-#         logging.warning("\n[경고] SSL 인증서 파일을 찾을 수 없습니다. SSL 없이 서버를 시작합니다.")
-#         logging.info("[server] Server is now fully ready and listening on ws://0.0.0.0:8100")
-#         web.run_app(app, host="0.0.0.0", port=8100, access_log=access_logger)
-
 if __name__ == "__main__":
     access_logger = logging.getLogger('aiohttp.access')
     
     try:
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        #ssl_ctx.load_cert_chain(r"C:/code/XGLiveASR_google/secrets/xenoglobal.co.kr-fullchain.pem", r"C:/code/XGLiveASR_google/secrets/newkey.pem")
-        ssl_ctx.load_cert_chain(SSL_CertFiles, SSL_KeyFiles)
-        logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:9500")
-        web.run_app(app, host="0.0.0.0", port=9500, ssl_context=ssl_ctx, access_log=access_logger)
+        ssl_ctx.load_cert_chain(r"D:/AutoSet9/server/conf/xenoglobal.co.kr-fullchain.pem", r"D:/AutoSet9/server/conf/newkey.pem")
+        logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:8100")
+        web.run_app(app, host="0.0.0.0", port=8100, ssl_context=ssl_ctx, access_log=access_logger)
     except FileNotFoundError:
         logging.warning("\n[경고] SSL 인증서 파일을 찾을 수 없습니다. SSL 없이 서버를 시작합니다.")
-        logging.info("[server] Server is now fully ready and listening on ws://0.0.0.0:9500")
-        web.run_app(app, host="0.0.0.0", port=9500, access_log=access_logger)
+        logging.info("[server] Server is now fully ready and listening on ws://0.0.0.0:8100")
+        web.run_app(app, host="0.0.0.0", port=8100, access_log=access_logger)
