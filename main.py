@@ -2,6 +2,7 @@
 
 import ssl
 import logging
+import asyncio
 
 from aiohttp import web
 
@@ -9,16 +10,15 @@ from aiohttp import web
 from logging_config import setup_logging
 from websocket_handler import ws_handler
 import config
+from db_manager import init_db_pool, close_db_pool  # [추가]
 
 # 로깅 설정 실행
 setup_logging()
-
-# --- [수정] 서버 시작 로그 위치 변경 및 내용 구체화 ---
 logging.info("--- 서버 초기화 시작: 콘솔 및 파일 로깅 활성화 ---")
 
 # GOOGLE_APPLICATION_CREDENTIALS 환경 변수 확인 로그
 if not config.GOOGLE_APPLICATION_CREDENTIALS:
-    logging.warning("GOOGLE_APPLICATION_CREDENTIALS 환경 변수가 설정되지 않았습니다.")
+    logging.warning("[Config] 기본 GOOGLE_APPLICATION_CREDENTIALS 환경 변수가 설정되지 않았습니다.")
 
 @web.middleware
 async def cors_mw(request, handler):
@@ -33,11 +33,24 @@ async def cors_mw(request, handler):
         resp.headers["Access-Control-Allow-Credentials"] = "true"
     return resp
 
+async def start_background_tasks(app):
+    """서버 시작 시 DB 풀 초기화"""
+    await init_db_pool()
+
+async def cleanup_background_tasks(app):
+    """서버 종료 시 DB 풀 정리"""
+    await close_db_pool()
+
 def create_app():
     """aiohttp 애플리케이션을 생성하고 라우트를 설정합니다."""
     app = web.Application(middlewares=[cors_mw])
     app.router.add_get("/ws", ws_handler)
     app.router.add_route("OPTIONS", "/ws", lambda r: web.Response())
+    
+    # --- [추가] 앱 생명주기에 DB 풀 관리 함수 등록 ---
+    app.on_startup.append(start_background_tasks)
+    app.on_shutdown.append(cleanup_background_tasks)
+
     return app
 
 if __name__ == "__main__":

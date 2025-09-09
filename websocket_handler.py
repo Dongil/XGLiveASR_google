@@ -5,6 +5,8 @@ import json
 import logging
 import re
 import uuid
+import os
+import tempfile
 from typing import Dict, Set
 
 from aiohttp import web
@@ -13,6 +15,7 @@ import config
 from config_manager import load_user_config, deep_update
 from stt_processor import google_stream_manager
 from translators import DeepLTranslator, PapagoTranslator, GoogleTranslator
+from db_manager import get_api_keys # [추가]
 
 CLIENTS: Dict[str, Set[web.WebSocketResponse]] = {}
 
@@ -20,14 +23,33 @@ async def ws_handler(request: web.Request):
     ws = web.WebSocketResponse(max_msg_size=8 * 1024 * 1024)
     await ws.prepare(request)
     
-    # --- [수정 시작] id와 user 파라미터를 모두 읽도록 변경 ---
+    # 'id' 파라미터를 읽기 ---
     user_id_raw = request.query.get("id", "")
     user_id = re.sub(r'[^a-zA-Z0-9_\-]', '', user_id_raw) if user_id_raw else f"anonymous_{str(uuid.uuid4().hex)[:8]}"
     
     # 'user' 파라미터를 읽고, 없으면 None으로 설정
     user_group_raw = request.query.get("user", "")
     user_group = re.sub(r'[^a-zA-Z0-9_\-]', '', user_group_raw) if user_group_raw else None
-    # --- [수정 종료] ---
+    
+    # --- [추가] 동적 키 및 임시 파일 관리를 위한 변수 ---
+    api_keys = await get_api_keys(user_group) if user_group else None
+    google_creds_path = None
+    original_google_creds = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+
+    # --- [추가] Google Credentials 동적 설정 로직 ---
+    if api_keys and api_keys.get('google_credentials'):
+        try:
+            # 임시 파일 생성 및 JSON 데이터 쓰기
+            fd, google_creds_path = tempfile.mkstemp(suffix=".json", text=True)
+            with os.fdopen(fd, 'w') as tmp:
+                tmp.write(api_keys['google_credentials'])
+            
+            # 환경 변수 설정
+            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = google_creds_path
+            logging.info(f"[{user_id}/{user_group}] [Auth] 동적 Google Credentials를 임시 파일({google_creds_path})에 설정했습니다.")
+        except Exception as e:
+            logging.error(f"[{user_id}/{user_group}] [Auth] 동적 Google Credentials 임시 파일 생성 실패: {e}")
+            google_creds_path = None
 
     if user_id not in CLIENTS:
         CLIENTS[user_id] = set()
@@ -52,11 +74,6 @@ async def ws_handler(request: web.Request):
                 logging.error(f"[{log_id}] 클라이언트로 JSON 전송 중 오류 발생: {e}")
 
     async def broadcast_sentence_with_translation(sentence: str):
-        # ... (로직 변경 없음, 여기에서 user_group 변수를 사용하여 동적 키 로딩 로직을 추가할 수 있습니다) ...
-        # 예를 들어:
-        # deepl_key = get_deepl_key_for_user(user_group) or config.DEEPL_API_KEY
-        # translator = DeepLTranslator(deepl_key)
-
         sentence = sentence.strip()
         if not sentence: return
         
@@ -74,26 +91,24 @@ async def ws_handler(request: web.Request):
 
         if not (engine_name and target_langs): return
 
+        # --- [수정] 번역기 초기화 시 동적 키 사용 ---
         translator = None
-
         try:
-            if engine_name == 'deepl' and config.DEEPL_API_KEY != "YOUR_DEEPL_API_KEY": translator = DeepLTranslator(config.DEEPL_API_KEY)
-            elif engine_name == 'papago' and config.NAVER_CLIENT_ID != "YOUR_NAVER_CLIENT_ID": translator = PapagoTranslator(config.NAVER_CLIENT_ID, config.NAVER_CLIENT_SECRET)
-            elif engine_name == 'google' and config.GOOGLE_APPLICATION_CREDENTIALS: translator = GoogleTranslator()
-            
-            # 동적으로 키 로딩하는 로직 예시 (구현 필요)
-            # if engine_name == 'deepl':
-            #     # deepl_api_key = find_key_for(user_group, 'deepl') or config.DEEPL_API_KEY
-            #     translator = DeepLTranslator(config.DEEPL_API_KEY)
-            # elif engine_name == 'papago':
-            #     # client_id, client_secret = find_keys_for(user_group, 'papago') or (config.NAVER_CLIENT_ID, config.NAVER_CLIENT_SECRET)
-            #     translator = PapagoTranslator(config.NAVER_CLIENT_ID, config.NAVER_CLIENT_SECRET)
-            # elif engine_name == 'google':
-            #     # credentials_path = find_path_for(user_group, 'google') or config.GOOGLE_APPLICATION_CREDENTIALS
-            #     # 여기서 동적으로 인증 정보를 바꾸는 로직은 복잡하므로 우선 기본값을 사용합니다.
-            #     if config.GOOGLE_APPLICATION_CREDENTIALS:
-            #         translator = GoogleTranslator()
+            if engine_name == 'deepl':
+                deepl_key = api_keys.get('deepl_key') if api_keys else None
+                translator = DeepLTranslator(deepl_key or config.DEEPL_API_KEY)
 
+            elif engine_name == 'papago':
+                naver_id = api_keys.get('naver_id') if api_keys else None
+                naver_secret = api_keys.get('naver_secret') if api_keys else None
+                translator = PapagoTranslator(naver_id or config.NAVER_CLIENT_ID, naver_secret or config.NAVER_CLIENT_SECRET)
+
+            elif engine_name == 'google':
+                # Google 클라이언트는 설정된 환경 변수를 자동으로 사용
+                if os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
+                    translator = GoogleTranslator()
+                else:
+                    logging.warning(f"[{log_id}] [Translate] Google 번역기 사용 요청이 있었으나, 인증 정보(GOOGLE_APPLICATION_CREDENTIALS)가 없습니다.")
         except Exception as e: 
             logging.error(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화 실패: {e}")
             return # 번역기 생성 실패 시 더 이상 진행하지 않음
@@ -151,6 +166,20 @@ async def ws_handler(request: web.Request):
             if not CLIENTS[user_id]:
                 del CLIENTS[user_id]
         
+        # --- [추가] 임시 파일 삭제 및 환경 변수 복원 ---
+        if google_creds_path:
+            try:
+                os.remove(google_creds_path)
+                logging.info(f"[{log_id}] [Auth] 임시 Google Credentials 파일({google_creds_path})을 삭제했습니다.")
+            except OSError as e:
+                logging.error(f"[{log_id}] [Auth] 임시 파일 삭제 실패: {e}")
+
+        if original_google_creds:
+            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = original_google_creds
+        elif 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
+            # 원래 환경 변수가 없었다면, 동적으로 설정한 것을 삭제
+            del os.environ['GOOGLE_APPLICATION_CREDENTIALS']        
+
         # --- [수정] 연결 종료 로그 개선 ---
         remaining_clients = len(CLIENTS.get(user_id, []))
         logging.info(f"[{log_id}] 클라이언트 연결 종료. '{user_id}' 그룹의 남은 클라이언트: {remaining_clients}명")
