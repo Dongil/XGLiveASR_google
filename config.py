@@ -29,6 +29,7 @@ SAMPLE_RATE = 16000
 # Path Configuration
 CONFIG_PATH = "user_configs/config.json"
 USER_CONFIG_DIR = "user_configs"
+SERVER_LOG_PATH = "system_logging/server.log"
 
 # Create directories if they don't exist
 os.makedirs(USER_CONFIG_DIR, exist_ok=True)
