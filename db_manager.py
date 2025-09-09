@@ -48,7 +48,7 @@ async def get_api_keys(user_group: str) -> dict | None:
             naver_secret, 
             google_credentials 
         FROM institutions 
-        WHERE i_key = %s AND i_del = 0
+        WHERE i_id = %s AND i_del = 0
     """
     conn = None
     try:
