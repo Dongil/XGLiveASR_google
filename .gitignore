@@ -8,4 +8,4 @@
 **/.venv/
 **/__pycache__/
 secrets/
-server_connections.log
+system_logging/
