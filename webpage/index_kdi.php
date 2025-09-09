@@ -305,6 +305,54 @@
         { select: document.getElementById('targetLanguage3'), title: document.getElementById('titleTranslated3'), baseTitle: '번역 결과 3' }
     ];
 
+    // --- [신규] 언어 및 엔진 지원 데이터 정의 ---
+    const ALL_LANGUAGES = [
+        { code: "en", name: "English" }, 
+        { code: "ja", name: "Japanese" },
+        { code: "zh", name: "Chinese" }, 
+        { code: "vi", name: "Vietnamese" },
+        { code: "id", name: "Indonesian" }, 
+        { code: "th", name: "Thai" },
+        { code: "mn", name: "Mongolian" }, 
+        { code: "uz", name: "Uzbek" },
+        { code: "tr", name: "Turkish" }, 
+        { code: "de", name: "German" },
+        { code: "it", name: "Italian" }, 
+        { code: "fr", name: "French" },
+        { code: "es", name: "Spanish" }, 
+        { code: "ru", name: "Russian" },
+        { code: "pt", name: "Portuguese" }
+    ];
+
+    /* 
+    const ALL_LANGUAGES = [
+    { code: "en", name: "영어" },
+    { code: "ja", name: "일본어" },
+    { code: "zh", name: "중국어" },
+    { code: "vi", name: "베트남어" },
+    { code: "id", name: "인도네시아어" },
+    { code: "th", name: "태국어" },
+    { code: "mn", name: "몽골어" },
+    { code: "uz", name: "우즈벡어" },
+    { code: "tr", name: "터키어" },
+    { code: "de", name: "독일어" },
+    { code: "it", name: "이탈리아어" },
+    { code: "fr", name: "프랑스어" },
+    { code: "es", name: "스페인어" },
+    { code: "ru", name: "러시아어" },
+    { code: "pt", name: "포르투갈어" }
+    ];
+    */
+
+    const LANGUAGE_NAMES = Object.fromEntries(ALL_LANGUAGES.map(lang => [lang.code, lang.name]));
+
+    const SUPPORTED_LANGUAGES_BY_ENGINE = {
+        'deepl': ['en', 'ja', 'zh', 'vi', 'id', 'tr', 'de', 'it', 'fr', 'es', 'ru', 'pt'],
+        'papago': ['en', 'ja', 'zh', 'vi', 'id', 'th', 'de', 'it', 'fr', 'es', 'ru'],
+        'google': ['en', 'ja', 'zh', 'vi', 'id', 'th', 'mn', 'uz', 'tr', 'de', 'it', 'fr', 'es', 'ru', 'pt']
+    };
+    // --- [신규] 정의 종료 ---
+
     // --- Global State ---
     let ws, ac, src, stream, worklet, rafId;
     let bytesSent = 0, seq = 0;
@@ -313,6 +361,57 @@
     let recordedChunks = [];
     let recordingStarted = false;
    
+    // --- [신규] 선택된 번역 언어를 앞으로 당겨 정리하는 함수 ---
+    function compactLanguageSelections() {
+        // 1. 현재 선택된 모든 언어 값을 수집 (중복 제거 포함)
+        const selectedValues = translationElements.map(item => item.select.value);
+        const validSelections = selectedValues.filter(val => val !== "");
+        const uniqueSelections = [...new Set(validSelections)];
+
+        // 2. 수집된 값을 1, 2, 3번 select에 순서대로 재할당
+        translationElements.forEach((item, index) => {
+            if (index < uniqueSelections.length) {
+                item.select.value = uniqueSelections[index];
+            } else {
+                item.select.value = ""; // 남는 자리는 '선택 안함'으로
+            }
+        });
+    }
+
+    // --- [신규] 번역 언어 옵션 업데이트 함수 ---
+    function updateLanguageOptions() {
+        const selectedEngine = translationEngineEl.value;
+        const supportedLangs = SUPPORTED_LANGUAGES_BY_ENGINE[selectedEngine] || [];
+
+        translationElements.forEach(item => {
+            const selectEl = item.select;
+            const previouslySelectedValue = selectEl.value;
+            
+            // 현재 선택된 옵션들을 모두 제거 (첫 번째 '선택 안함' 옵션 제외)
+            while (selectEl.options.length > 1) {
+                selectEl.remove(1);
+            }
+
+            // 지원하는 언어 목록으로 새로운 옵션 추가
+            if (selectedEngine) { // 엔진이 선택된 경우에만
+                supportedLangs.forEach(langCode => {
+                    const option = document.createElement('option');
+                    option.value = langCode;
+                    option.textContent = LANGUAGE_NAMES[langCode] || langCode;
+                    selectEl.appendChild(option);
+                });
+            }
+
+            // 이전 선택값 유지 시도
+            if (supportedLangs.includes(previouslySelectedValue)) {
+                selectEl.value = previouslySelectedValue;
+            } else {
+                selectEl.value = ""; // 지원하지 않으면 '선택 안함'으로
+            }
+        });
+    }
+    // --- [신규] 함수 종료 ---
+
     // --- UI/UX Helper Functions ---
     const W_BREAKPOINT = 900;
     const H_BREAKPOINT = 500;
@@ -753,30 +852,38 @@
         // --- [수정 종료] ---
 
         listDevices(); 
+        
+        // --- [수정 시작] 페이지 로드 시 및 이벤트 핸들러 등록 ---
+        updateLanguageOptions(); // 페이지 로드 시 초기 언어 목록 설정
         updateTranslationTitles();
         updateWindowsAndLayout();
         
         btnStart.onclick = start; 
         btnStop.onclick = stop;
         sidebarToggleBtn.onclick = toggleSidebar;
-        toggleJsonConfigBtn.onclick = () => jsonConfigArea.classList.toggle('visible');
-		/*
-        btnGetConfig.onclick = () => {
-            if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'get_config' }));
-            else alert("서버에 먼저 연결해주세요.");
-        };
-        btnApplyConfig.onclick = () => sendConfigToServer(false);
-        btnSaveConfig.onclick = () => sendConfigToServer(true);
-		*/
+        toggleJsonConfigBtn.onclick = () => jsonConfigArea.classList.toggle('visible');		
+        
         document.querySelectorAll('.download-btn').forEach(b => b.addEventListener('click', handleDownload));
         toggleCheckboxes.forEach(cb => { cb.onchange = updateWindowsAndLayout; });
+        
+        // --- [수정] 이벤트 핸들러 로직 개선 ---
         [translationEngineEl, ...translationElements.map(item => item.select)].forEach(el => {
             el.onchange = () => {
+                // 1. 엔진이 변경되면, 먼저 언어 옵션 목록부터 갱신
+                if (el.id === 'translationEngine') {
+                    updateLanguageOptions();
+                }
+
+                // 2. 어떤 변경이든(엔진 또는 언어), 선택된 언어를 앞으로 정렬
+                compactLanguageSelections();
+
+                // 3. 최종 확정된 설정으로 후속 작업 수행
                 sendTranslationConfig();
-                if (el.id.startsWith('targetLanguage')) updateTranslationTitles();
+                updateTranslationTitles();
                 updateWindowsAndLayout();
             };
         });
+        // --- [수정 종료] ---
         
         window.addEventListener('resize', () => {
             updateOutputGridLayout();
