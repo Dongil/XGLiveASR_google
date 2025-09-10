@@ -6,3 +6,5 @@ kss
 python-dotenv
 uvicorn[standard]
 websockets
+aiomysql
+cryptography
