@@ -16,12 +16,12 @@ SSL_CertFiles = os.getenv("SSL_CERT_PATH")
 SSL_KeyFiles = os.getenv("SSL_KEY_PATH")
 
 # Database Configuration
-DB_NAME = os.getenv("DB_NAME", "YOUR_DB_NAME")
 DB_IP = os.getenv("DB_IP", "YOUR_DB_IP")
 DB_USER = os.getenv("DB_USER", "YOUR_DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "YOUR_DB_PASSWORD")
 DB_PORT = os.getenv("DB_PORT", "YOUR_DB_PORT")
-DB_RSA_PRIVATE_KEY = os.getenv("DB_RSA_PRIVATE_KEY", "YOUR_RSA_PRIVATE_KEY")
+DB_TABLE = os.getenv("DB_TABLE", "YOUR_DB_TABLE")
+DB_RSA_PRIVATE_KEY_PATH = os.getenv("DB_RSA_PRIVATE_KEY_PATH", "YOUR_RSA_PRIVATE_KEY")
 
 # STT Configuration
 SAMPLE_RATE = 16000

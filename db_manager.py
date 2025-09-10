@@ -3,7 +3,7 @@
 import logging
 import aiomysql
 import config
-from crypto_utils import decrypt_rsa
+#from crypto_utils import decrypt_rsa_from_file
 
 DB_POOL = None
 
@@ -13,12 +13,13 @@ async def init_db_pool():
     if DB_POOL is not None:
         return
     try:
+
         DB_POOL = await aiomysql.create_pool(
             host=config.DB_IP,
             port=int(config.DB_PORT),
             user=config.DB_USER,
             password=config.DB_PASSWORD,
-            db=config.DB_NAME,
+            db=config.DB_TABLE,
             autocommit=True,
             minsize=1,
             maxsize=10
@@ -40,7 +41,7 @@ async def get_api_keys(user_group: str) -> dict | None:
     """user_group(i_key)을 기반으로 암호화된 API 키를 조회하고 복호화하여 반환"""
     if not user_group or not DB_POOL:
         return None
-
+        
     sql = """
         SELECT 
             deepl_key, 
@@ -61,14 +62,22 @@ async def get_api_keys(user_group: str) -> dict | None:
             logging.warning(f"[{user_group}] [DB] 해당 그룹의 API 키 정보를 찾을 수 없습니다.")
             return None
 
+        # decrypted_keys = {
+        #     'deepl_key': decrypt_rsa_from_file(result.get('deepl_key'), config.DB_RSA_PRIVATE_KEY_PATH),
+        #     'naver_id': decrypt_rsa_from_file(result.get('naver_id'), config.DB_RSA_PRIVATE_KEY_PATH),
+        #     'naver_secret': decrypt_rsa_from_file(result.get('naver_secret'), config.DB_RSA_PRIVATE_KEY_PATH),
+        #     'google_credentials': decrypt_rsa_from_file(result.get('google_credentials'), config.DB_RSA_PRIVATE_KEY_PATH)
+        # }
+        #logging.info(f"[{user_group}] [DB] 그룹의 API 키를 성공적으로 조회 및 복호화했습니다.")
+
         decrypted_keys = {
-            'deepl_key': decrypt_rsa(result.get('deepl_key'), config.DB_RSA_PRIVATE_KEY),
-            'naver_id': decrypt_rsa(result.get('naver_id'), config.DB_RSA_PRIVATE_KEY),
-            'naver_secret': decrypt_rsa(result.get('naver_secret'), config.DB_RSA_PRIVATE_KEY),
-            'google_credentials': decrypt_rsa(result.get('google_credentials'), config.DB_RSA_PRIVATE_KEY)
+            'deepl_key': result.get('deepl_key'),
+            'naver_id': result.get('naver_id'),
+            'naver_secret': result.get('naver_secret'),
+            'google_credentials': result.get('google_credentials')
         }
-        
-        logging.info(f"[{user_group}] [DB] 그룹의 API 키를 성공적으로 조회 및 복호화했습니다.")
+        logging.info(f"[{user_group}, {decrypted_keys.get('deepl_key')}, {decrypted_keys.get('naver_id')}, {decrypted_keys.get('naver_secret')}, {decrypted_keys.get('google_credentials')}] [DB] 그룹의 API 키를 성공적으로 조회했습니다.")
+
         return decrypted_keys
 
     except Exception as e:
