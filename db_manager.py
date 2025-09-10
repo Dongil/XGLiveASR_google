@@ -76,7 +76,7 @@ async def get_api_keys(user_group: str) -> dict | None:
             'naver_secret': result.get('naver_secret'),
             'google_credentials': result.get('google_credentials')
         }
-        logging.info(f"[{user_group}, {decrypted_keys.get('deepl_key')}, {decrypted_keys.get('naver_id')}, {decrypted_keys.get('naver_secret')}, {decrypted_keys.get('google_credentials')}] [DB] 그룹의 API 키를 성공적으로 조회했습니다.")
+        logging.info(f"[{user_group}] [DB] 그룹의 API 키를 성공적으로 조회했습니다.")
 
         return decrypted_keys
 
