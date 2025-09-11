@@ -43,7 +43,7 @@ DB_RSA_PRIVATE_KEY_PATH = os.getenv("DB_RSA_PRIVATE_KEY_PATH", "YOUR_RSA_PRIVATE
 SAMPLE_RATE = 16000
 
 # Path Configuration
-CONFIG_PATH = "user_configs/config.json"
+CONFIG_PATH = "./user_configs/config_google.json"
 USER_CONFIG_DIR = "user_configs"
 SERVER_LOG_PATH = "system_logging/server.log"
 
