@@ -7,8 +7,20 @@ import copy
 from config import CONFIG_PATH, USER_CONFIG_DIR
 
 DEFAULT_CONFIG = {
-    "google_stt": {"language_code": "ko-KR", "model": "latest_long", "use_enhanced": True, "enable_automatic_punctuation": True, "speech_adaptation": {"phrases": [], "boost": 15.0}},
-    "translation": { "engine": "papago", "target_langs": ["en"] }
+    "google_stt": {
+        "language_code": "ko-KR", 
+        "model": "latest_long", 
+        "use_enhanced": True, 
+        "enable_automatic_punctuation": True, 
+        "speech_adaptation": {
+            "phrases": [], 
+            "boost": 15.0
+        }
+    },
+    "translation": { 
+        "engine": "papago", 
+        "target_langs": ["en"] 
+    }
 }
 
 def deep_update(d, u):
@@ -18,11 +30,16 @@ def deep_update(d, u):
 
 def load_user_config(user_id: str):
     cfg = copy.deepcopy(DEFAULT_CONFIG)
+    #logging.info(f"cfg : {cfg}")
+
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            try: 
-                deep_update(cfg, json.load(f))                
-            except json.JSONDecodeError: logging.error(f"[Config] 전역 설정 파일({CONFIG_PATH})이 손상되었습니다.")
+            try:
+                deep_update(cfg, json.load(f))
+                #logging.info(f"cfg 2 : {cfg}")
+            except json.JSONDecodeError: 
+                logging.error(f"[Config] 전역 설정 파일({CONFIG_PATH})이 손상되었습니다.")
+                
     # if user_id:
     #     user_config_path = os.path.join(USER_CONFIG_DIR, f"config_{user_id}.json")
     #     if os.path.exists(user_config_path):
