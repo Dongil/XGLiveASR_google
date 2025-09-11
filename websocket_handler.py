@@ -34,22 +34,18 @@ async def ws_handler(request: web.Request):
     # --- [추가] 동적 키 및 임시 파일 관리를 위한 변수 ---
     api_keys = await get_api_keys(user_group) if user_group else None
     google_creds_path = None
-    original_google_creds = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
-
-    # --- [추가] Google Credentials 동적 설정 로직 ---
+    
+    # --- [수정] Google Credentials 처리 로직: os.environ을 사용하지 않음 ---
     if api_keys and api_keys.get('google_credentials'):
         try:
-            # 임시 파일 생성 및 JSON 데이터 쓰기
             fd, google_creds_path = tempfile.mkstemp(suffix=".json", text=True)
-            with os.fdopen(fd, 'w') as tmp:
+            with os.fdopen(fd, 'w', encoding='utf-8') as tmp: # 인코딩 명시
                 tmp.write(api_keys['google_credentials'])
             
-            # 환경 변수 설정
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = google_creds_path
-            logging.info(f"[{user_id}/{user_group}] [Auth] 동적 Google Credentials를 임시 파일({google_creds_path})에 설정했습니다.")
+            logging.info(f"[{user_id}/{user_group}] [Auth] 동적 Google Credentials를 임시 파일({google_creds_path})에 생성했습니다.")
         except Exception as e:
             logging.error(f"[{user_id}/{user_group}] [Auth] 동적 Google Credentials 임시 파일 생성 실패: {e}")
-            google_creds_path = None
+            google_creds_path = None # 실패 시 None으로 설정
 
     if user_id not in CLIENTS:
         CLIENTS[user_id] = set()
@@ -104,11 +100,8 @@ async def ws_handler(request: web.Request):
                 translator = PapagoTranslator(naver_id or config.NAVER_CLIENT_ID, naver_secret or config.NAVER_CLIENT_SECRET)
 
             elif engine_name == 'google':
-                # Google 클라이언트는 설정된 환경 변수를 자동으로 사용
-                if os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
-                    translator = GoogleTranslator()
-                else:
-                    logging.warning(f"[{log_id}] [Translate] Google 번역기 사용 요청이 있었으나, 인증 정보(GOOGLE_APPLICATION_CREDENTIALS)가 없습니다.")
+                # --- [수정] google_creds_path를 직접 전달하여 번역기 생성 ---
+                translator = GoogleTranslator(credentials_path=google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS)                
         except Exception as e: 
             logging.error(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화 실패: {e}")
             return # 번역기 생성 실패 시 더 이상 진행하지 않음
@@ -131,10 +124,11 @@ async def ws_handler(request: web.Request):
 
     await send_json({"type": "info", "text": "connected."})
     
-    # 분리된 STT 매니저를 호출하며 필요한 함수와 변수들을 인자로 전달합니다.
+    # --- [수정] google_stream_manager 호출 시 google_creds_path 전달 ---
     google_task = asyncio.create_task(google_stream_manager(
         ws, log_id, client_config, audio_queue, 
-        broadcast_sentence_with_translation, send_json
+        broadcast_sentence_with_translation, send_json,
+        google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS # 동적 경로가 없으면 기본 경로 사용
     ))
 
     try:
@@ -166,19 +160,13 @@ async def ws_handler(request: web.Request):
             if not CLIENTS[user_id]:
                 del CLIENTS[user_id]
         
-        # --- [추가] 임시 파일 삭제 및 환경 변수 복원 ---
+        # --- [수정] 임시 파일만 삭제하고 os.environ은 건드리지 않음 ---
         if google_creds_path:
             try:
                 os.remove(google_creds_path)
                 logging.info(f"[{log_id}] [Auth] 임시 Google Credentials 파일({google_creds_path})을 삭제했습니다.")
             except OSError as e:
-                logging.error(f"[{log_id}] [Auth] 임시 파일 삭제 실패: {e}")
-
-        if original_google_creds:
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = original_google_creds
-        elif 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
-            # 원래 환경 변수가 없었다면, 동적으로 설정한 것을 삭제
-            del os.environ['GOOGLE_APPLICATION_CREDENTIALS']        
+                logging.error(f"[{log_id}] [Auth] 임시 파일 삭제 실패: {e}")       
 
         # --- [수정] 연결 종료 로그 개선 ---
         remaining_clients = len(CLIENTS.get(user_id, []))

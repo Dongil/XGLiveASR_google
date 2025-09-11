@@ -4,12 +4,19 @@ import asyncio
 import logging
 import copy
 from google.cloud import speech
+# [추가] google 인증 관련 모듈 임포트
+from google.oauth2 import service_account
 import kss
 from config import SAMPLE_RATE
 
-async def google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func):
+# --- [수정] google_creds_path 인자 추가 ---
+async def google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path: str | None):
     """Google STT 스트림을 처리하고 결과를 브로드캐스팅하는 코어 로직"""
-    client = speech.SpeechAsyncClient()
+    # --- [수정] credentials 인자를 사용하여 클라이언트 생성 ---
+    credentials = None
+    if google_creds_path:
+        credentials = service_account.Credentials.from_service_account_file(google_creds_path)
+    client = speech.SpeechAsyncClient(credentials=credentials)
     
     session_stable_transcript = ""
     utterance_stable_transcript = ""
@@ -107,12 +114,12 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
             logging.info(f"[{log_id}] [STT] 스트림 종료 후 남은 버퍼 처리: \"{final_sentence}\"")
             await broadcast_func(final_sentence)
 
-
-async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func):
+# --- [수정] google_creds_path 인자 추가 및 전달 ---
+async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path: str | None):
     """STT 프로세서를 관리하고, 연결이 끊겼을 때 재연결을 시도합니다."""
     while not ws.closed:
         try:
-            await google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func)
+            await google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path)
         except asyncio.CancelledError:
             break
         except Exception as e:

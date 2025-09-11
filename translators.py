@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 
 import aiohttp
 import deepl
+# [추가] google 인증 관련 모듈 임포트
+from google.oauth2 import service_account
 
 class Translator(ABC):
     @abstractmethod
@@ -45,10 +47,16 @@ class PapagoTranslator(Translator):
         except Exception as e: logging.error(f"[Translate] Papago 번역 중 예외 발생 ({target_lang}): {e}"); return f"[Papago {target_lang} 번역 실패]"
 
 class GoogleTranslator(Translator):
-    def __init__(self):
+    def __init__(self, credentials_path: str | None = None):
         try:
             from google.cloud import translate_v2 as translate
-            self.client = translate.Client()
+            
+            credentials = None
+            if credentials_path:
+                credentials = service_account.Credentials.from_service_account_file(credentials_path)
+
+            # credentials 인자를 사용하여 클라이언트 생성
+            self.client = translate.Client(credentials=credentials)            
         except Exception as e: raise ValueError(f"Google Translate 클라이언트 초기화 실패: {e}.")
         self.lang_map = {"en": "en", "ja": "ja", "zh": "zh-CN", "vi": "vi", "id": "id", "th": "th", "mn": "mn", "uz": "uz", "tr": "tr", "de": "de", "it": "it", "fr": "fr", "es": "es", "ru": "ru", "pt": "pt"}
     

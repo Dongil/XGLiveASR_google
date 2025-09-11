@@ -2,6 +2,7 @@
 
 import ssl
 import logging
+import sys
 import asyncio
 
 from aiohttp import web
@@ -10,6 +11,7 @@ from aiohttp import web
 from logging_config import setup_logging
 from websocket_handler import ws_handler
 import config
+from config import AppConfig  # [수정] AppConfig 클래스 임포트
 from db_manager import init_db_pool, close_db_pool  # [추가]
 
 # 로깅 설정 실행
@@ -54,20 +56,45 @@ def create_app():
     return app
 
 if __name__ == "__main__":
+    # --- [수정 시작] 커맨드 라인 인자로부터 실행 환경 결정 ---
+    # 실행 예: python main.py server1
+    # 인자가 없으면 'dev'를 기본값으로 사용
+    if len(sys.argv) > 1:
+        env = sys.argv[1]
+    else:
+        env = 'dev'
+
+    try:
+        app_config = AppConfig(env)
+        logging.info(f"[{env}] 환경으로 서버 설정을 로드했습니다: {app_config.__dict__}")
+    except Exception as e:
+        logging.error(f"'{env}' 환경의 설정을 system.ini에서 로드하는 데 실패했습니다: {e}")
+        sys.exit(1) # 설정 로드 실패 시 서버 종료
+
     app = create_app()
     access_logger = logging.getLogger('aiohttp.access')
     
-    # --- [추가] 포트 번호를 변수로 관리하여 로그에 활용 ---
-    PORT = 9500
-    
-    try:
-        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ssl_ctx.load_cert_chain(config.SSL_CertFiles, config.SSL_KeyFiles)
-        # --- [수정] 서버 준비 완료 로그 개선 ---
-        logging.info(f"[Server] SSL 설정 완료. wss://0.0.0.0:{PORT} 에서 연결 대기 중...")
-        web.run_app(app, host="0.0.0.0", port=PORT, ssl_context=ssl_ctx, access_log=access_logger)
-    except (FileNotFoundError, TypeError):
-        # --- [수정] SSL 실패 및 일반 시작 로그 개선 ---
-        logging.warning("[Server] SSL 인증서 파일을 찾을 수 없거나 경로가 잘못되었습니다. SSL 없이 서버를 시작합니다.")
-        logging.info(f"[Server] ws://0.0.0.0:{PORT} 에서 연결 대기 중...")
-        web.run_app(app, host="0.0.0.0", port=PORT, access_log=access_logger)
+    ssl_ctx = None
+    # SSL 설정이 있는지 확인
+    if app_config.protocol in ['https', 'wss'] and app_config.ssl_certfile and app_config.ssl_keyfile:
+        try:
+            ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_ctx.load_cert_chain(app_config.ssl_certfile, app_config.ssl_keyfile)
+            logging.info(f"[Server] SSL 설정 완료. {app_config.protocol}://{app_config.host}:{app_config.port} 에서 연결 대기 중...")
+        except FileNotFoundError:
+            logging.error(f"[Server] SSL 인증서 파일을 찾을 수 없습니다. 경로를 확인하세요: cert='{app_config.ssl_certfile}', key='{app_config.ssl_keyfile}'")
+            ssl_ctx = None # SSL 로드 실패 시 None으로 되돌림
+        except Exception as e:
+            logging.error(f"[Server] SSL 컨텍스트 생성 중 오류 발생: {e}")
+            ssl_ctx = None
+
+    if ssl_ctx is None:
+        logging.info(f"[Server] SSL 없이 시작합니다. ws://{app_config.host}:{app_config.port} 에서 연결 대기 중...")
+
+    web.run_app(
+        app, 
+        host=app_config.host, 
+        port=app_config.port, 
+        ssl_context=ssl_ctx, 
+        access_log=access_logger
+    )
