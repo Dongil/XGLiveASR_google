@@ -16,6 +16,7 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
     credentials = None
     if google_creds_path:
         credentials = service_account.Credentials.from_service_account_file(google_creds_path)
+
     client = speech.SpeechAsyncClient(credentials=credentials)
     
     session_stable_transcript = ""
@@ -52,10 +53,13 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
             while True:
                 try:
                     chunk = await asyncio.wait_for(audio_queue.get(), timeout=1.0)
-                    if chunk is None: break
+                    if chunk is None: 
+                        break
+
                     yield speech.StreamingRecognizeRequest(audio_content=chunk)
                 except asyncio.TimeoutError:
-                    if ws.closed: break
+                    if ws.closed: 
+                        break
 
         logging.info(f"[{log_id}] [STT] Google STT 스트림 시작 (발화 단위 모드).")
         stream = await client.streaming_recognize(requests=audio_stream_generator())
