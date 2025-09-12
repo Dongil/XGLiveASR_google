@@ -39,7 +39,7 @@ def load_user_config(user_id: str):
                 #logging.info(f"cfg 2 : {cfg}")
             except json.JSONDecodeError: 
                 logging.error(f"[Config] 전역 설정 파일({CONFIG_PATH})이 손상되었습니다.")
-                
+
     # if user_id:
     #     user_config_path = os.path.join(USER_CONFIG_DIR, f"config_{user_id}.json")
     #     if os.path.exists(user_config_path):

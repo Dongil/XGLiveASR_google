@@ -67,6 +67,7 @@ if __name__ == "__main__":
     try:
         app_config = AppConfig(env)
         logging.info(f"[{env}] 환경으로 서버 설정을 로드했습니다: {app_config.__dict__}")
+        #logging.info(f"[{env}] 환경으로 서버 설정을 로드했습니다")
     except Exception as e:
         logging.error(f"'{env}' 환경의 설정을 system.ini에서 로드하는 데 실패했습니다: {e}")
         sys.exit(1) # 설정 로드 실패 시 서버 종료

@@ -65,7 +65,8 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
         stream = await client.streaming_recognize(requests=audio_stream_generator())
         
         async for response in stream:
-            if not response.results or not response.results[0].alternatives: continue
+            if not response.results or not response.results[0].alternatives: 
+                continue
             
             result = response.results[0]
             transcript = result.alternatives[0].transcript
