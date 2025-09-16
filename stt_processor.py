@@ -78,7 +78,10 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
 
             while True:
                 try:
-                    chunk = await asyncio.wait_for(audio_queue.get(), timeout=1.0)
+                    #chunk = await asyncio.wait_for(audio_queue.get(), timeout=1.0)
+                    # [수정] 타임아웃을 조금 더 길게 설정하여 안정성 확보 (예: 5초)
+                    # 너무 짧으면 유휴 상태에서 불필요하게 스트림이 재시작될 수 있습니다.
+                    chunk = await asyncio.wait_for(audio_queue.get(), timeout=5.0)
                     if chunk is None: 
                         break
 
@@ -93,10 +96,13 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
                     if ws.closed: 
                         break;
                 except asyncio.TimeoutError as e:
-                    logging.error(f"[{log_id}] asyncio.TimeoutError : {e}", exc_info=True) # exc_info=True 추가하여 상세한 에러 로그 확인
-
-                    if ws.closed: 
-                        break
+                    # logging.error(f"[{log_id}] asyncio.TimeoutError : {e}", exc_info=True) # exc_info=True 추가하여 상세한 에러 로그 확인
+                    # if ws.closed: 
+                    #     break
+                    # 타임아웃은 정상적인 상황일 수 있으므로 break하여 스트림을 자연스럽게 종료시킵니다.
+                    # 매니저에서 재연결을 시도할 것입니다.
+                    logging.info(f"[{log_id}] [STT] 오디오 입력이 없어 audio_queue.get() 타임아웃 발생.")
+                    break
 
         logging.info(f"[{log_id}] [STT] Google STT 스트림 시작 (발화 단위 모드).")
         stream = await client.streaming_recognize(requests=audio_stream_generator())
@@ -183,8 +189,10 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
         #logging.info(f"[{log_id}] [STT] API로 전송된 총 오디오 길이 : {total_audio_bytes_sent} bytes / {total_audio_seconds:.2f} 초, ({total_audio_minutes:.2f} 분)")
         # [수정] logging.info의 f-string 포맷을 요청하신 대로 변경합니다.
         # {total_audio_kb:.2f} KB 와 같이 KB 값도 소수점 둘째 자리까지 표시하도록 포맷팅합니다.
-        logging.info(f"[{log_id}] [STT] API로 전송된 총 오디오 길이 : {total_audio_bytes_sent} bytes, ({total_audio_kb:.2f} KB) / {total_audio_seconds:.2f} 초, ({total_audio_minutes:.2f} 분)")
-        logging.info(f"[{log_id}] [STT] API로부터 수신된 총 텍스트: {total_transcript_chars} 자 ({total_transcript_bytes} bytes, {total_transcript_kb:.2f} KB)")
+        # logging.info(f"[{log_id}] [STT] API로 전송된 총 오디오 길이 : {total_audio_bytes_sent} bytes, ({total_audio_kb:.2f} KB) / {total_audio_seconds:.2f} 초, ({total_audio_minutes:.2f} 분)")
+        # logging.info(f"[{log_id}] [STT] API로부터 수신된 총 텍스트: {total_transcript_chars} 자 ({total_transcript_bytes} bytes, {total_transcript_kb:.2f} KB)")
+        # [수정] 로그 메시지를 한 줄로 통합하여 가독성 개선
+        logging.info(f"[{log_id}] [STT Summary] Sent: {total_audio_kb:.2f} KB ({total_audio_seconds:.2f}s), Received: {total_transcript_kb:.2f} KB ({total_transcript_chars} chars)")
 
 # --- [수정] google_creds_path 인자 추가 및 전달 ---
 async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path: str | None):
@@ -193,19 +201,24 @@ async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcas
         try:
             await google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path)
         except asyncio.CancelledError:
+            logging.info(f"[{log_id}] [STT] 스트림 매니저가 정상적으로 취소되었습니다.")
             break
         except Exception as e:
             # --- [수정 시작] Audio Timeout Error는 INFO 레벨로, 그 외의 에러만 ERROR로 처리 ---
             error_str = str(e)
-            if "Audio Timeout" in error_str:
+            #if "Audio Timeout" in error_str:
+            if "Audio Timeout" in error_str or "400 stream" in error_str:
                 logging.info(f"[{log_id}] [STT] 오디오 입력이 없어 스트림이 타임아웃되었습니다. (정상 동작)")
             else:
                 #logging.error(f"[{log_id}] [STT] 스트림 매니저 오류 발생: {e}")
-                logging.error(f"[{log_id}] [STT] 스트림 매니저 오류 발생: {e}", exc_info=True) # exc_info=True 추가하여 상세한 에러 로그 확인
+                logging.error(f"[{log_id}] [STT] 스트림 매니저에서 예상치 못한 오류 발생 : {e}", exc_info=True) # exc_info=True 추가하여 상세한 에러 로그 확인
             # --- [수정 종료] ---
         
         if ws.closed:
             break
         
-        logging.warning(f"[{log_id}] [STT] 스트림 재연결 시도...")
-        await asyncio.sleep(0.1)
+        # logging.warning(f"[{log_id}] [STT] 스트림 재연결 시도...")
+        # await asyncio.sleep(0.1)
+        # [수정] 재연결 시도를 조금 더 긴 간격으로 조정하여 서버 부하 감소
+        logging.info(f"[{log_id}] [STT] 1초 후 스트림 재연결을 시도합니다...")
+        await asyncio.sleep(1)
