@@ -62,7 +62,8 @@ async def ws_handler(request: web.Request):
 
     async def send_json(data):
         if not ws.closed:
-            try: await ws.send_str(json.dumps(data, ensure_ascii=False))
+            try: 
+                await ws.send_str(json.dumps(data, ensure_ascii=False))
             except ConnectionResetError:
                 # --- [추가] 흔한 예외는 경고 수준으로 처리 ---
                 logging.warning(f"[{log_id}] 클라이언트로 전송 시도 중 연결이 초기화되었습니다.")
@@ -71,7 +72,8 @@ async def ws_handler(request: web.Request):
 
     async def broadcast_sentence_with_translation(sentence: str):
         sentence = sentence.strip()
-        if not sentence: return
+        if not sentence: 
+            return
         
         sentence_id = str(uuid.uuid4())
         
@@ -85,7 +87,8 @@ async def ws_handler(request: web.Request):
         trans_cfg = client_config.get("translation", {})
         engine_name, target_langs = trans_cfg.get("engine"), trans_cfg.get("target_langs", [])
 
-        if not (engine_name and target_langs): return
+        if not (engine_name and target_langs): 
+            return
 
         # --- [수정] 번역기 초기화 시 동적 키 사용 ---
         translator = None
@@ -134,6 +137,7 @@ async def ws_handler(request: web.Request):
     try:
         while not ws.closed:
             msg = await ws.receive()
+
             if msg.type == web.WSMsgType.BINARY: 
                 await audio_queue.put(msg.data[4:])
             elif msg.type == web.WSMsgType.TEXT:
@@ -146,14 +150,17 @@ async def ws_handler(request: web.Request):
                 elif msg_type == "config":
                     deep_update(client_config, data.get("options", {}))
                     await send_json({"type": "ack", "text": "config applied."})
-            elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED): break
+            elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED): 
+                break
     except Exception as e:
         # --- [추가] 웹소켓 루프에서 예외 발생 시 로그 기록 ---
         logging.error(f"[{log_id}] 웹소켓 메시지 처리 루프 중 오류 발생: {e}")
     finally:
         google_task.cancel()
-        try: await google_task
-        except asyncio.CancelledError: pass
+        try: 
+            await google_task
+        except asyncio.CancelledError: 
+            pass
         
         if user_id in CLIENTS:
             CLIENTS[user_id].discard(ws)
@@ -172,5 +179,7 @@ async def ws_handler(request: web.Request):
         remaining_clients = len(CLIENTS.get(user_id, []))
         logging.info(f"[{log_id}] 클라이언트 연결 종료. '{user_id}' 그룹의 남은 클라이언트: {remaining_clients}명")
         
-        if not ws.closed: await ws.close()
+        if not ws.closed: 
+            await ws.close()
+            
     return ws

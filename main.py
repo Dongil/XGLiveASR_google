@@ -24,14 +24,27 @@ if not config.GOOGLE_APPLICATION_CREDENTIALS:
 
 @web.middleware
 async def cors_mw(request, handler):
-    if request.method == "OPTIONS": resp = web.Response(status=200)
-    else: resp = await handler(request)
-    if isinstance(resp, web.StreamResponse): return resp
+    if request.method == "OPTIONS": 
+        resp = web.Response(status=200)
+    else: 
+        resp = await handler(request)
+
+    if isinstance(resp, web.StreamResponse): 
+        return resp
+    
     origin = request.headers.get("Origin")
-    allowed_origins = { "http://localhost:8080", "http://127.0.0.1:8080", "https://asr.xenoglobal.co.kr", "https://asr.xenoglobal.co.kr:8448" }
+    allowed_origins = { 
+        "http://localhost:8080", 
+        "http://127.0.0.1:8080", 
+        "https://asr.xenoglobal.co.kr", 
+        "https://asr.xenoglobal.co.kr:8448" 
+    }
+
     if origin in allowed_origins:
-        resp.headers["Access-Control-Allow-Origin"], resp.headers["Vary"] = origin, "Origin"
-        resp.headers["Access-Control-Allow-Methods"], resp.headers["Access-Control-Allow-Headers"] = "GET,POST,OPTIONS", "Content-Type"
+        resp.headers["Access-Control-Allow-Origin"], 
+        resp.headers["Vary"] = origin, "Origin"
+        resp.headers["Access-Control-Allow-Methods"], 
+        resp.headers["Access-Control-Allow-Headers"] = "GET,POST,OPTIONS", "Content-Type"
         resp.headers["Access-Control-Allow-Credentials"] = "true"
     return resp
 
@@ -67,6 +80,7 @@ if __name__ == "__main__":
     try:
         app_config = AppConfig(env)
         logging.info(f"[{env}] 환경으로 서버 설정을 로드했습니다: {app_config.__dict__}")
+        #logging.info(f"[{env}] 환경으로 서버 설정을 로드했습니다")
     except Exception as e:
         logging.error(f"'{env}' 환경의 설정을 system.ini에서 로드하는 데 실패했습니다: {e}")
         sys.exit(1) # 설정 로드 실패 시 서버 종료
