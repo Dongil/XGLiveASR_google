@@ -26,7 +26,7 @@ async def init_db_pool():
         )
         logging.info("[DB] 데이터베이스 커넥션 풀이 성공적으로 생성되었습니다.")
     except Exception as e:
-        logging.error(f"[DB] 데이터베이스 커넥션 풀 생성에 실패했습니다: {e}")
+        logging.error(f"[DB] 데이터베이스 커넥션 풀 생성에 실패했습니다 : {e}")
         DB_POOL = None
 
 async def close_db_pool():
@@ -81,5 +81,5 @@ async def get_api_keys(user_group: str) -> dict | None:
         return decrypted_keys
 
     except Exception as e:
-        logging.error(f"[{user_group}] [DB] API 키 조회 중 오류 발생: {e}")
+        logging.error(f"[{user_group}] [DB] API 키 조회 중 오류 발생 : {e}")
         return None

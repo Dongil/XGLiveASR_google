@@ -79,10 +79,10 @@ if __name__ == "__main__":
 
     try:
         app_config = AppConfig(env)
-        logging.info(f"[{env}] 환경으로 서버 설정을 로드했습니다: {app_config.__dict__}")
+        logging.info(f"[{env}] 환경으로 서버 설정을 로드했습니다 : {app_config.__dict__}")
         #logging.info(f"[{env}] 환경으로 서버 설정을 로드했습니다")
     except Exception as e:
-        logging.error(f"'{env}' 환경의 설정을 system.ini에서 로드하는 데 실패했습니다: {e}")
+        logging.error(f"'{env}' 환경의 설정을 system.ini에서 로드하는 데 실패했습니다 : {e}")
         sys.exit(1) # 설정 로드 실패 시 서버 종료
 
     app = create_app()
@@ -96,10 +96,10 @@ if __name__ == "__main__":
             ssl_ctx.load_cert_chain(app_config.ssl_certfile, app_config.ssl_keyfile)
             logging.info(f"[Server] SSL 설정 완료. {app_config.protocol}://{app_config.host}:{app_config.port} 에서 연결 대기 중...")
         except FileNotFoundError:
-            logging.error(f"[Server] SSL 인증서 파일을 찾을 수 없습니다. 경로를 확인하세요: cert='{app_config.ssl_certfile}', key='{app_config.ssl_keyfile}'")
+            logging.error(f"[Server] SSL 인증서 파일을 찾을 수 없습니다. 경로를 확인하세요 : cert='{app_config.ssl_certfile}', key='{app_config.ssl_keyfile}'")
             ssl_ctx = None # SSL 로드 실패 시 None으로 되돌림
         except Exception as e:
-            logging.error(f"[Server] SSL 컨텍스트 생성 중 오류 발생: {e}")
+            logging.error(f"[Server] SSL 컨텍스트 생성 중 오류 발생 : {e}")
             ssl_ctx = None
 
     if ssl_ctx is None:

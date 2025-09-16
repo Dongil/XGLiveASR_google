@@ -30,7 +30,7 @@ class DeepLTranslator(Translator):
             result = await asyncio.to_thread(self.translator.translate_text, text, source_lang="KO", target_lang=self.lang_map[target_lang])
             return result.text
         except Exception as e:
-            logging.error(f"[Translate] DeepL 번역 오류 ({target_lang}): {e}"); return f"[{target_lang} 번역 실패]"
+            logging.error(f"[Translate] DeepL 번역 오류 ({target_lang}) : {e}"); return f"[{target_lang} 번역 실패]"
 
 class PapagoTranslator(Translator):
     def __init__(self, client_id: str, client_secret: str):
@@ -64,7 +64,7 @@ class PapagoTranslator(Translator):
                 else:
                     # [수정] 실패 시 로그를 더 상세하게 남김
                     error_text = await response.text()
-                    logging.error(f"[Translate] Papago API 오류 ({response.status}): {error_text}")
+                    logging.error(f"[Translate] Papago API 오류 ({response.status}) : {error_text}")
                     return f"[Papago {target_lang} 번역 실패]"
         except Exception as e: 
             logging.error(f"[Translate] Papago 번역 중 예외 발생 ({target_lang}): {e}"); 
@@ -91,5 +91,5 @@ class GoogleTranslator(Translator):
             result = await loop.run_in_executor(None, lambda: self.client.translate(text, target_language=self.lang_map[target_lang], source_language='ko'))
             return html.unescape(result['translatedText'])
         except Exception as e: 
-            logging.error(f"[Translate] Google 번역 오류 ({target_lang}): {e}"); 
+            logging.error(f"[Translate] Google 번역 오류 ({target_lang}) : {e}"); 
             return f"[{target_lang} Google 번역 실패]"

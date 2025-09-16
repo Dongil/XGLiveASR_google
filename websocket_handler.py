@@ -51,9 +51,6 @@ async def ws_handler(request: web.Request):
             logging.error(f"[{user_id}/{user_group}] [Auth] 동적 Google Credentials 임시 파일 생성 실패: {e}")
             google_creds_path = None # 실패 시 None으로 설정
 
-    # if user_id not in CLIENTS:
-    #     CLIENTS[user_id] = set()
-    # CLIENTS[user_id].add(ws)
     # [최적화] Lock을 사용하여 CLIENTS 딕셔너리 접근을 보호
     async with CLIENT_LOCK:
         if user_id not in CLIENTS:
@@ -65,48 +62,56 @@ async def ws_handler(request: web.Request):
     client_count = len(CLIENTS[user_id])
     log_id_base = f"{user_id}" + (f"/{user_group}" if user_group else "")
     log_id = f"{log_id_base} ({client_count})"
-    logging.info(f"[{log_id}] 클라이언트 연결됨 (from {request.remote}). '{user_id}' 그룹의 총 클라이언트: {client_count}명")
+    logging.info(f"[{log_id}] 클라이언트 연결됨 (from {request.remote}). '{user_id}' 그룹의 총 클라이언트 : {client_count} 명")
 
     client_config = load_user_config(user_id)
     audio_queue = asyncio.Queue()
 
-    # [최적화] 웹소켓 연결 동안 단 한번만 Translator 객체와 aiohttp.ClientSession을 생성합니다.
-    translator: Translator | None = None
-    trans_cfg = client_config.get("translation", {})
-    engine_name = trans_cfg.get("engine", "")
+    # --- [핵심 수정] 번역기 생성 로직을 별도의 헬퍼 함수로 분리 ---
+    async def _create_translator_from_config(cfg: dict) -> Translator | None:
+        """설정 사전을 기반으로 Translator 객체를 생성하여 반환합니다."""
+        engine_name = cfg.get("engine")
 
-    # --- [수정] 번역기 초기화 시 동적 키 사용 ---
-    translator = None
-    try:
-        if engine_name == 'deepl':
-            deepl_key = api_keys.get('deepl_key') if api_keys else None
-            translator = DeepLTranslator(deepl_key or config.DEEPL_API_KEY)
+        # --- [수정] 번역기 초기화 시 동적 키 사용 ---
+        new_translator = None
+        try:
+            if engine_name == 'deepl':
+                deepl_key = api_keys.get('deepl_key') if api_keys else None
+                new_translator = DeepLTranslator(deepl_key or config.DEEPL_API_KEY)
 
-        elif engine_name == 'papago':
-            naver_id = api_keys.get('naver_id') if api_keys else None
-            naver_secret = api_keys.get('naver_secret') if api_keys else None
-            translator = PapagoTranslator(naver_id or config.NAVER_CLIENT_ID, naver_secret or config.NAVER_CLIENT_SECRET)
+            elif engine_name == 'papago':
+                naver_id = api_keys.get('naver_id') if api_keys else None
+                naver_secret = api_keys.get('naver_secret') if api_keys else None
+                new_translator = PapagoTranslator(naver_id or config.NAVER_CLIENT_ID, naver_secret or config.NAVER_CLIENT_SECRET)
 
-        elif engine_name == 'google':
-            # --- [수정] google_creds_path를 직접 전달하여 번역기 생성 ---
-            translator = GoogleTranslator(credentials_path=google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS)                
-    except Exception as e: 
-        logging.error(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화 실패: {e}")
-        translator = None # 실패 시 명시적으로 None 설정
-        #return # 번역기 생성 실패 시 더 이상 진행하지 않음
+            elif engine_name == 'google':
+                # --- [수정] google_creds_path를 직접 전달하여 번역기 생성 ---
+                new_translator = GoogleTranslator(credentials_path=google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS)
+            
+            if new_translator:
+                logging.info(f"[{log_id}] [Translate] '{engine_name}' 번역기를 성공적으로 초기화했습니다.")
 
-    # --- [핵심 수정] ---
-    # [원인] 기존 로그는 engine_name 변수만 출력하여, 설정 파일에 engine이 ""로 되어 있을 때 빈 값을 보여주었습니다.
-    # [해결] translator 객체가 성공적으로 생성되었는지 여부를 확인하여 로그를 분기합니다.
-    #       - 성공 시: 어떤 번역기가 선택되었는지 명확히 알려줍니다.
-    #       - 실패 또는 미설정 시: 번역 기능이 비활성화되었음을 경고 로그로 알려주어 문제 파악을 쉽게 합니다.
-    if translator:
-        logging.info(f"[{log_id}] [Translate] 번역기 활성화됨: '{engine_name}'")
-    else:
-        if engine_name: # engine 이름은 있으나 초기화에 실패한 경우
-            logging.warning(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화에 실패하여 번역 기능이 비활성화되었습니다.")
-        else: # engine 설정 자체가 없는 경우
-            logging.info(f"[{log_id}] [Translate] 번역기가 설정되지 않아 번역 기능이 비활성화되었습니다.")
+        except Exception as e: 
+            logging.error(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화 실패 : {e}")
+            new_translator = None
+
+        # --- [핵심 수정] ---
+        # [원인] 기존 로그는 engine_name 변수만 출력하여, 설정 파일에 engine이 ""로 되어 있을 때 빈 값을 보여주었습니다.
+        # [해결] translator 객체가 성공적으로 생성되었는지 여부를 확인하여 로그를 분기합니다.
+        #       - 성공 시: 어떤 번역기가 선택되었는지 명확히 알려줍니다.
+        #       - 실패 또는 미설정 시: 번역 기능이 비활성화되었음을 경고 로그로 알려주어 문제 파악을 쉽게 합니다.
+        if new_translator:
+            logging.info(f"[{log_id}] [Translate] 번역기 활성화됨 : '{engine_name}'")
+        else:
+            if engine_name: # engine 이름은 있으나 초기화에 실패한 경우
+                logging.warning(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화에 실패하여 번역 기능이 비활성화되었습니다.")
+            else: # engine 설정 자체가 없는 경우
+                logging.info(f"[{log_id}] [Translate] 번역기가 설정되지 않아 번역 기능이 비활성화되었습니다.")
+
+        return new_translator
+
+    # [최적화] 웹소켓 연결 동안 사용할 translator 변수. 헬퍼 함수를 통해 초기화.
+    translator: Translator | None = await _create_translator_from_config(client_config.get("translation", {}))
 
     async def send_json(data):
         if not ws.closed:
@@ -116,7 +121,7 @@ async def ws_handler(request: web.Request):
                 # --- [추가] 흔한 예외는 경고 수준으로 처리 ---
                 logging.warning(f"[{log_id}] 클라이언트로 전송 시도 중 연결이 초기화되었습니다.")
             except Exception as e:
-                logging.error(f"[{log_id}] 클라이언트로 JSON 전송 중 오류 발생: {e}")
+                logging.error(f"[{log_id}] 클라이언트로 JSON 전송 중 오류 발생 : {e}")
 
     # [최적화] aiohttp.ClientSession을 컨텍스트 관리자로 생성하여 연결 전체에서 재사용
     async with aiohttp.ClientSession() as http_session:
@@ -138,7 +143,6 @@ async def ws_handler(request: web.Request):
             stt_tasks = [client.send_str(final_stt_payload) for client in current_clients if not client.closed]
             
             if stt_tasks:
-                #await asyncio.gather(*stt_tasks, return_exceptions=True)
                 # [최적화] gather 결과를 받아 예외를 로깅합니다.
                 results = await asyncio.gather(*stt_tasks, return_exceptions=True)
                 for i, result in enumerate(results):
@@ -146,38 +150,14 @@ async def ws_handler(request: web.Request):
                         logging.warning(f"[{log_id}] [Broadcast] STT 전송 실패 (client index {i}): {result}")
                         
             logging.info(f"[{log_id}] [Broadcast] STT 전송 (to {len(stt_tasks)} clients): \"{sentence}\"")
+            
+            # [수정] 현재 client_config를 직접 참조하여 항상 최신 설정을 반영
+            current_trans_cfg = client_config.get("translation", {})
+            target_langs = current_trans_cfg.get("target_langs", [])
 
-            # trans_cfg = client_config.get("translation", {})
-            # engine_name, target_langs = trans_cfg.get("engine"), trans_cfg.get("target_langs", [])
-            target_langs = trans_cfg.get("target_langs", [])
-
-            if not (engine_name and target_langs): 
+            if not translator or not target_langs:
                 return
 
-            # # --- [수정] 번역기 초기화 시 동적 키 사용 ---
-            # translator = None
-            # try:
-            #     if engine_name == 'deepl':
-            #         deepl_key = api_keys.get('deepl_key') if api_keys else None
-            #         translator = DeepLTranslator(deepl_key or config.DEEPL_API_KEY)
-
-            #     elif engine_name == 'papago':
-            #         naver_id = api_keys.get('naver_id') if api_keys else None
-            #         naver_secret = api_keys.get('naver_secret') if api_keys else None
-            #         translator = PapagoTranslator(naver_id or config.NAVER_CLIENT_ID, naver_secret or config.NAVER_CLIENT_SECRET)
-
-            #     elif engine_name == 'google':
-            #         # --- [수정] google_creds_path를 직접 전달하여 번역기 생성 ---
-            #         translator = GoogleTranslator(credentials_path=google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS)                
-            # except Exception as e: 
-            #     logging.error(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화 실패: {e}")
-            #     return # 번역기 생성 실패 시 더 이상 진행하지 않음
-
-            # if not translator:
-            #     logging.warning(f"[{log_id}] [Translate] '{engine_name}' 번역기를 사용할 수 없거나 설정이 누락되었습니다.")
-            #     return
-
-            #translations = await asyncio.gather(*[translator.translate(sentence, lang) for lang in target_langs])
             # [최적화] PapagoTranslator일 경우, 재사용하는 http_session을 전달합니다.
             if isinstance(translator, PapagoTranslator):
                 translations = await asyncio.gather(*[translator.translate(sentence, lang, session=http_session) for lang in target_langs])
@@ -195,7 +175,6 @@ async def ws_handler(request: web.Request):
             trans_tasks = [client.send_str(translation_payload) for client in current_clients if not client.closed]
             
             if trans_tasks:
-                #await asyncio.gather(*trans_tasks, return_exceptions=True)
                 # [최적화] gather 결과를 받아 예외를 로깅합니다.
                 results = await asyncio.gather(*trans_tasks, return_exceptions=True)
                 for i, result in enumerate(results):
@@ -225,11 +204,18 @@ async def ws_handler(request: web.Request):
                     data = json.loads(msg.data)
                     # --- [추가] 클라이언트로부터 메시지 수신 로그 ---
                     msg_type = data.get("type", "unknown")
-                    logging.info(f"[{log_id}] 클라이언트 메시지 수신 (type: {msg_type})")
+                    logging.info(f"[{log_id}] 클라이언트 메시지 수신 (type : {msg_type})")
                     if msg_type == "get_config": 
                         await send_json({"type": "config", "data": client_config})
                     elif msg_type == "config":
-                        deep_update(client_config, data.get("options", {}))
+                        options = data.get("options", {})
+                        deep_update(client_config, options)
+
+                        # --- [핵심 수정] 번역 설정이 변경된 경우, Translator 객체를 다시 생성 ---
+                        if 'translation' in options:
+                            logging.info(f"[{log_id}] [Config] 번역 설정을 동적으로 업데이트합니다...")
+                            translator = await _create_translator_from_config(options.get("translation", {}))
+
                         await send_json({"type": "ack", "text": "config applied."})
                 elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED): 
                     break
@@ -261,7 +247,7 @@ async def ws_handler(request: web.Request):
 
             # --- [수정] 연결 종료 로그 개선 ---
             remaining_clients = len(CLIENTS.get(user_id, []))
-            logging.info(f"[{log_id}] 클라이언트 연결 종료. '{user_id}' 그룹의 남은 클라이언트: {remaining_clients}명")
+            logging.info(f"[{log_id}] 클라이언트 연결 종료. '{user_id}' 그룹의 남은 클라이언트 : {remaining_clients}명")
             
             if not ws.closed: 
                 await ws.close()

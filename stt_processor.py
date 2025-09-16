@@ -138,7 +138,7 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
                 await send_json_func({"type": "stt_interim", "text": utterance_unstable_buffer})
 
             else:
-                logging.info(f"[{log_id}] [STT] 최종 발화 수신: \"{transcript}\"")
+                logging.info(f"[{log_id}] [STT] 최종 발화 수신 : \"{transcript}\"")
 
                 # [추가] 최종 확정된(final) transcript의 길이만 누적합니다.
                 # 중간(interim) 결과는 계속 바뀌므로, 최종 결과만 카운트해야 정확한 총 길이를 알 수 있습니다.
@@ -168,7 +168,7 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
 
         if utterance_unstable_buffer.strip():
             final_sentence = utterance_unstable_buffer.strip()
-            logging.info(f"[{log_id}] [STT] 스트림 종료 후 남은 버퍼 처리: \"{final_sentence}\"")
+            logging.info(f"[{log_id}] [STT] 스트림 종료 후 남은 버퍼 처리 : \"{final_sentence}\"")
             await broadcast_func(final_sentence)
 
         # [추가] 전송된 오디오의 총 길이를 계산하여 로그 출력
@@ -192,7 +192,7 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
         # logging.info(f"[{log_id}] [STT] API로 전송된 총 오디오 길이 : {total_audio_bytes_sent} bytes, ({total_audio_kb:.2f} KB) / {total_audio_seconds:.2f} 초, ({total_audio_minutes:.2f} 분)")
         # logging.info(f"[{log_id}] [STT] API로부터 수신된 총 텍스트: {total_transcript_chars} 자 ({total_transcript_bytes} bytes, {total_transcript_kb:.2f} KB)")
         # [수정] 로그 메시지를 한 줄로 통합하여 가독성 개선
-        logging.info(f"[{log_id}] [STT Summary] Sent: {total_audio_kb:.2f} KB ({total_audio_seconds:.2f}s), Received: {total_transcript_kb:.2f} KB ({total_transcript_chars} chars)")
+        logging.info(f"[{log_id}] [STT Summary] Total Sent Data : {total_audio_kb:.2f} KB ({total_audio_seconds:.2f}s), Total Received Data : {total_transcript_kb:.2f} KB ({total_transcript_chars} 자)")
 
 # --- [수정] google_creds_path 인자 추가 및 전달 ---
 async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path: str | None):
