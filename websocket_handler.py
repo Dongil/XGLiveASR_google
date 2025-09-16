@@ -73,7 +73,7 @@ async def ws_handler(request: web.Request):
     # [최적화] 웹소켓 연결 동안 단 한번만 Translator 객체와 aiohttp.ClientSession을 생성합니다.
     translator: Translator | None = None
     trans_cfg = client_config.get("translation", {})
-    engine_name = trans_cfg.get("engine")
+    engine_name = trans_cfg.get("engine", "")
 
     # --- [수정] 번역기 초기화 시 동적 키 사용 ---
     translator = None
@@ -94,7 +94,19 @@ async def ws_handler(request: web.Request):
         logging.error(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화 실패: {e}")
         translator = None # 실패 시 명시적으로 None 설정
         #return # 번역기 생성 실패 시 더 이상 진행하지 않음
-    logging.info(f"[{log_id}] 선택된 번역기 : {engine_name}")
+
+    # --- [핵심 수정] ---
+    # [원인] 기존 로그는 engine_name 변수만 출력하여, 설정 파일에 engine이 ""로 되어 있을 때 빈 값을 보여주었습니다.
+    # [해결] translator 객체가 성공적으로 생성되었는지 여부를 확인하여 로그를 분기합니다.
+    #       - 성공 시: 어떤 번역기가 선택되었는지 명확히 알려줍니다.
+    #       - 실패 또는 미설정 시: 번역 기능이 비활성화되었음을 경고 로그로 알려주어 문제 파악을 쉽게 합니다.
+    if translator:
+        logging.info(f"[{log_id}] [Translate] 번역기 활성화됨: '{engine_name}'")
+    else:
+        if engine_name: # engine 이름은 있으나 초기화에 실패한 경우
+            logging.warning(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화에 실패하여 번역 기능이 비활성화되었습니다.")
+        else: # engine 설정 자체가 없는 경우
+            logging.info(f"[{log_id}] [Translate] 번역기가 설정되지 않아 번역 기능이 비활성화되었습니다.")
 
     async def send_json(data):
         if not ws.closed:
