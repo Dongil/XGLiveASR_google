@@ -735,7 +735,20 @@
     document.addEventListener('DOMContentLoaded', () => {
         try {
             const params = new URLSearchParams(window.location.search);
-            if (params.has('id')) wsUrlEl.value = `${wsUrlEl.value}?id=${encodeURIComponent(params.get('id'))}`;
+            const wsParams = new URLSearchParams(); // 웹소켓 연결용 파라미터 객체 생성
+            
+            if (params.has('id')) {
+                wsParams.set('id', params.get('id'));
+            }
+            if (params.has('user')) {
+                wsParams.set('user', params.get('user'));
+            }
+
+            const wsQueryString = wsParams.toString();
+            
+            if (wsQueryString) {
+                wsUrlEl.value = `${wsUrlEl.value}?${wsQueryString}`;
+            }            
         } catch (e) { console.error("URL param error:", e); }
 
         listDevices(); 
