@@ -154,7 +154,7 @@
   <div class="main-container" id="mainContainer">
     <div class="card controls-card" id="controlsCard">
       <button id="closeOverlayBtn" aria-label="설정 닫기">&times;</button>
-      <input type="hidden" id="wsUrl" value="wss://asr.xenoglobal.co.kr:8100/ws">
+      <input type="hidden" id="wsUrl" value="wss://ai1.xenoglobal.co.kr:9500/ws">
       <section>
         <div class="section-header">
             <h3>장치 및 연결 설정</h3>
@@ -909,7 +909,7 @@
         showQrBtn.onclick = () => {
             const currentUrl = new URL(window.location.href);
             const userId = currentUrl.searchParams.get('id');
-            const viewerPageName = 'index_viewer_google_1.html'; // 공통 뷰어 페이지
+            const viewerPageName = 'index_viewer_google_2.html'; // 공통 뷰어 페이지
             const viewerUrl = `${currentUrl.origin}${currentUrl.pathname.substring(0, currentUrl.pathname.lastIndexOf('/'))}/${viewerPageName}${userId ? '?id=' + encodeURIComponent(userId) : ''}`;
             
             if (qrCodeContainer) {

@@ -1,5 +1,4 @@
 # 버전 32.8 - 파일 로깅 기능 추가
-
 import asyncio
 import json
 import os
@@ -111,8 +110,10 @@ DEFAULT_CONFIG = {
 }
 def deep_update(d, u):
     for k, v in u.items():
-        if isinstance(v, dict) and isinstance(d.get(k), dict): deep_update(d[k], v)
-        else: d[k] = v
+        if isinstance(v, dict) and isinstance(d.get(k), dict): 
+            deep_update(d[k], v)
+        else: 
+            d[k] = v
 def load_user_config(user_id: str):
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     if os.path.exists(CONFIG_PATH):
@@ -189,12 +190,21 @@ async def ws_handler(request: web.Request):
         if engine_name and target_langs:
             translator = None
             try:
-                if engine_name == 'deepl' and DEEPL_API_KEY != "YOUR_DEEPL_API_KEY": translator = DeepLTranslator(DEEPL_API_KEY)
-                elif engine_name == 'papago' and NAVER_CLIENT_ID != "YOUR_NAVER_CLIENT_ID": translator = PapagoTranslator(NAVER_CLIENT_ID, NAVER_CLIENT_SECRET)
-                elif engine_name == 'google' and GOOGLE_APPLICATION_CREDENTIALS: translator = GoogleTranslator()
-            except Exception as e: logging.error(f"[{log_id}] Translator init failed for '{engine_name}': {e}")
-            if translator: translations = await asyncio.gather(*[translator.translate(sentence, lang) for lang in target_langs])
-            else: logging.warning(f"[{log_id}] Translator '{engine_name}' not available.")
+                if engine_name == 'deepl' and DEEPL_API_KEY != "YOUR_DEEPL_API_KEY":
+                    translator = DeepLTranslator(DEEPL_API_KEY)
+                    logging.info("[engine_name] : deepl")
+                elif engine_name == 'papago' and NAVER_CLIENT_ID != "YOUR_NAVER_CLIENT_ID":
+                    translator = PapagoTranslator(NAVER_CLIENT_ID, NAVER_CLIENT_SECRET)
+                    logging.info("[engine_name] : papago")
+                elif engine_name == 'google' and GOOGLE_APPLICATION_CREDENTIALS:
+                    translator = GoogleTranslator()
+                    logging.info("[engine_name] : google")
+            except Exception as e: 
+                logging.error(f"[{log_id}] Translator init failed for '{engine_name}': {e}")
+            if translator: 
+                translations = await asyncio.gather(*[translator.translate(sentence, lang) for lang in target_langs])
+            else: 
+                logging.warning(f"[{log_id}] Translator '{engine_name}' not available.")
         
         translation_payload = json.dumps({"type": "translation_update", "sentence_id": sentence_id, "translations": translations}, ensure_ascii=False)
         trans_tasks = [client.send_str(translation_payload) for client in current_clients if not client.closed]
@@ -212,35 +222,37 @@ async def ws_handler(request: web.Request):
             await asyncio.sleep(0.1)
 
     async def google_stream_processor():
-        nonlocal sentence_buffer
-        client, adaptation_client, phrase_set_name = speech.SpeechAsyncClient(), None, None
-        full_transcript = ""
+        client = speech.SpeechAsyncClient()
+        
+        session_stable_transcript = ""
+        utterance_stable_transcript = ""
+        utterance_unstable_buffer = ""
+
         try:
+            # 1. STT 설정 준비 (수정된 부분)
             stt_config_from_json = copy.deepcopy(client_config.get("google_stt", {}))
-            adaptation_config_data = stt_config_from_json.pop("speech_adaptation", None)
             
+            # --- [핵심 수정] speech_adaptation을 미리 제거하고 adaptation_object를 생성 ---
+            adaptation_config_data = stt_config_from_json.pop("speech_adaptation", None)
             adaptation_object = None
             if adaptation_config_data and adaptation_config_data.get("phrases"):
-                adaptation_client = speech.AdaptationClient()
-                project_id = os.getenv('GCP_PROJECT_ID')
-                if project_id:
-                    parent = f"projects/{project_id}/locations/global"
-                    phrase_set_id = f"lecture-phraseset-{uuid.uuid4()}"
-                    phrase_set = adaptation_client.create_phrase_set(parent=parent, phrase_set_id=phrase_set_id, phrase_set=speech.PhraseSet(phrases=[speech.PhraseSet.Phrase(value=p, boost=adaptation_config_data.get("boost", 15.0)) for p in adaptation_config_data["phrases"]]))
-                    phrase_set_name = phrase_set.name
-                    adaptation_object = speech.SpeechAdaptation(phrase_set_references=[phrase_set_name])
-                    logging.info(f"[{log_id}] Adaptation Phrase Set '{phrase_set_name}' created.")
-                else: logging.error(f"[{log_id}] GCP_PROJECT_ID not set. Cannot use Speech Adaptation.")
-            
+                # Speech Adaptation을 사용하는 경우, 관련 클라이언트 및 객체 생성 로직이 필요합니다.
+                # 지금은 사용하지 않더라도 에러 방지를 위해 pop()은 유지합니다.
+                # (실제 사용 시에는 AdaptationClient 관련 코드를 여기에 추가해야 합니다)
+                logging.info(f"[{log_id}] Speech Adaptation phrases found but client logic is disabled in this version.")
+                pass
+
             recognition_config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
                 sample_rate_hertz=SAMPLE_RATE,
-                adaptation=adaptation_object,
+                adaptation=adaptation_object,  # speech_adaptation 대신 adaptation 인자 사용
                 **stt_config_from_json
             )
+            # --- 수정 종료 ---
             
             streaming_config = speech.StreamingRecognitionConfig(config=recognition_config, interim_results=True, single_utterance=True)
-            
+
+            # 2. 오디오 스트림 생성기 (기존과 동일)
             async def audio_stream_generator():
                 yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
                 while True:
@@ -250,43 +262,62 @@ async def ws_handler(request: web.Request):
                         yield speech.StreamingRecognizeRequest(audio_content=chunk)
                     except asyncio.TimeoutError:
                         if ws.closed: break
-            
-            logging.info(f"[{log_id}] Starting new Google STT stream (single_utterance=True)...")
+
+            logging.info(f"[{log_id}] 새로운 Google STT 스트림 시작 (발화 단위 상태관리 모드)...")
             stream = await client.streaming_recognize(requests=audio_stream_generator())
             
             async for response in stream:
                 if not response.results or not response.results[0].alternatives: continue
+                
                 result = response.results[0]
                 transcript = result.alternatives[0].transcript
 
-                if result.is_final:
-                    final_piece = transcript.strip()
-                    if final_piece:
-                        await send_json({"type": "stt_interim", "text": full_transcript + " " + final_piece})
-                        logging.info(f"[{log_id}] RECV (Final Utterance): {final_piece}")
-                        sentence_buffer += final_piece + " "
-                        sentences = kss.split_sentences(sentence_buffer)
-                        if sentences: # kss가 문장을 하나라도 분리했다면
-                            # 마지막 문장을 제외하고 모두 즉시 전송
-                            if len(sentences) > 1:
-                                for sentence in sentences[:-1]:
-                                    await broadcast_sentence_with_translation(sentence)
-                            
-                            # 마지막 문장이 온전한지 확인 (마침표, 물음표 등으로 끝나는가)
-                            last_sentence = sentences[-1]
-                            if last_sentence.strip() and last_sentence.strip()[-1] in ['.', '?', '!']:
-                                await broadcast_sentence_with_translation(last_sentence)
-                                sentence_buffer = "" # 버퍼를 비워줌
-                            else:
-                                # 온전한 문장이 아니면 다음 발화를 위해 버퍼에 남겨둠
-                                sentence_buffer = last_sentence
+                if not result.is_final:
+                    unprocessed_part = transcript
+                    if utterance_stable_transcript:
+                        unprocessed_part = transcript[len(utterance_stable_transcript):].lstrip()
+
+                    sentences = kss.split_sentences(unprocessed_part)
+
+                    if len(sentences) > 1:
+                        completed_sentences = sentences[:-1]
+                        utterance_unstable_buffer = sentences[-1]
+
+                        for sentence in completed_sentences:
+                            clean_sentence = sentence.strip()
+                            if clean_sentence:
+                                await broadcast_sentence_with_translation(clean_sentence)
+                                utterance_stable_transcript += sentence.strip() + " "
+                    else:
+                        utterance_unstable_buffer = unprocessed_part
+
+                    await send_json({"type": "stt_interim", "text": utterance_unstable_buffer})
+
                 else:
-                    await send_json({"type": "stt_interim", "text": full_transcript + " " + transcript})
+                    logging.info(f"[{log_id}] RECV [Google 최종 발화]: {transcript}")
+
+                    final_unprocessed_part = transcript
+                    if utterance_stable_transcript:
+                        final_unprocessed_part = transcript[len(utterance_stable_transcript):].lstrip()
+                    
+                    if final_unprocessed_part:
+                        final_sentences = kss.split_sentences(final_unprocessed_part)
+                        for sentence in final_sentences:
+                            clean_sentence = sentence.strip()
+                            if clean_sentence:
+                                await broadcast_sentence_with_translation(clean_sentence)
+                    
+                    session_stable_transcript += transcript.strip() + " "
+                    utterance_stable_transcript = ""
+                    utterance_unstable_buffer = ""
+
+                    await send_json({"type": "stt_interim", "text": ""})
+
         finally:
-            logging.info(f"[{log_id}] Google STT stream finished.")
-            if adaptation_client and phrase_set_name:
-                try: adaptation_client.delete_phrase_set(name=phrase_set_name)
-                except Exception as e: logging.warning(f"[{log_id}] Failed to delete Phrase Set: {e}")
+            logging.info(f"[{log_id}] Google STT 스트림 종료됨.")
+            if utterance_unstable_buffer.strip():
+                logging.info(f"[{log_id}] 스트림 종료, 남은 조각 최종 처리: {utterance_unstable_buffer.strip()}")
+                await broadcast_sentence_with_translation(utterance_unstable_buffer.strip())
 
     await send_json({"type": "info", "text": "connected."})
     google_task = asyncio.create_task(google_stream_manager())
@@ -304,8 +335,8 @@ async def ws_handler(request: web.Request):
             elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED): break
     except Exception: pass
     finally:
-        if sentence_buffer.strip():
-            await broadcast_sentence_with_translation(sentence_buffer)
+        # if sentence_buffer.strip():
+        #     await broadcast_sentence_with_translation(sentence_buffer)
         
         google_task.cancel()
         try: await google_task
@@ -320,11 +351,6 @@ async def ws_handler(request: web.Request):
         if not ws.closed: await ws.close()
     return ws
 
-
-
-
-
-
 app = web.Application(middlewares=[cors_mw])
 app.router.add_get("/ws", ws_handler)
 app.router.add_route("OPTIONS", "/ws", lambda r: web.Response())
@@ -334,12 +360,11 @@ if __name__ == "__main__":
     
     try:
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        
         #ssl_ctx.load_cert_chain(r"C:/code/XGLiveASR_google/secrets/xenoglobal.co.kr-fullchain.pem", r"C:/code/XGLiveASR_google/secrets/newkey.pem")
         ssl_ctx.load_cert_chain(SSL_CertFiles, SSL_KeyFiles)
         logging.info("\n[server] Server is now fully ready and listening on wss://0.0.0.0:9500")
         web.run_app(app, host="0.0.0.0", port=9500, ssl_context=ssl_ctx, access_log=access_logger)
     except FileNotFoundError:
         logging.warning("\n[경고] SSL 인증서 파일을 찾을 수 없습니다. SSL 없이 서버를 시작합니다.")
-        logging.info("[server] Server is now fully ready and listening on ws://0.0.0.0:9500")
-        web.run_app(app, host="0.0.0.0", port=9500, access_log=access_logger)
+        logging.info("[server] Server is now fully ready and listening on ws://0.0.0.0:8100")
+        web.run_app(app, host="0.0.0.0", port=8100, access_log=access_logger)
