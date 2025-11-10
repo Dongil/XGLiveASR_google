@@ -17,3 +17,6 @@ XGLiveASR_google
 │   └── server.log          # 서버 로그 파일 
 ├── old_code/               # 이전 소스
 └── webpage/                # 프론트앤드 php 소스
+
+
+branch kdi/D - 뷰어 질문 기능 추가 작업
