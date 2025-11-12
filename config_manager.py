@@ -17,9 +17,12 @@ DEFAULT_CONFIG = {
             "boost": 15.0
         }
     },
-    "translation": { 
-        "engine": "papago", 
-        "target_langs": ["en"] 
+    "translation": {         
+        "language_engine_map": {
+            "en": "deepl",
+            "ja": "papago",
+            "mn": "google" 
+        }    
     }
 }
 
