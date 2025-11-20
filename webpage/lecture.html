@@ -322,6 +322,7 @@
         const resetEngineConfigBtn = document.getElementById('resetEngineConfigBtn');
         const additionalLanguagesSection = document.getElementById('additional-languages-section');
         const additionalLanguagesList = document.getElementById('additional-languages-list');
+        
         const logElements = [ document.getElementById('log-original'), document.getElementById('log-translated1'), document.getElementById('log-translated2'), document.getElementById('log-translated3') ];
         const logWrappers = [ document.getElementById('log-original-wrapper'), document.getElementById('log-translated1-wrapper'), document.getElementById('log-translated2-wrapper'), document.getElementById('log-translated3-wrapper') ];
         const toggleCheckboxes = [ document.getElementById('toggleOriginal'), document.getElementById('toggleTranslated1'), document.getElementById('toggleTranslated2'), document.getElementById('toggleTranslated3') ];
@@ -396,18 +397,21 @@
 
         function sendTranslationConfig() {
             if (!ws || ws.readyState !== 1) return;
+            targetLangs = [];
             const majorLangs = translationElements.map(item => item.select.value).filter(lang => lang);
-            const studentLangs = targetLangs.filter(lang => !majorLangs.includes(lang));
-            const finalTargetLangs = [...new Set([...majorLangs, ...studentLangs])];
+            //const studentLangs = targetLangs.filter(lang => !majorLangs.includes(lang));
+            //const finalTargetLangs = [...new Set([...majorLangs, ...studentLangs])];
+
+            targetLangs = majorLangs;
 
             const options = { 
                 translation: { 
                     language_engine_map: languageEngineMap,
-                    target_langs: finalTargetLangs
+                    target_langs: targetLangs
                 } 
             };
-            ws.send(JSON.stringify({ type: "config", options }));
-            logSystemMessage("번역 설정을 서버로 임시 적용했습니다.");
+            ws.send(JSON.stringify({ type: "save_config", options }));
+            logSystemMessage("서버에 설정을 저장 요청했습니다.");
         }
         
         function updateWindowsAndLayout() {
@@ -515,15 +519,15 @@
         function getLogContent(logContainer) {
             return Array.from(logContainer.querySelectorAll('p:not(.interim)')).map(p => p.textContent).join('\n');
         }
-
         function downloadFile(blob, filename) {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url; a.download = filename;
-            document.body.appendChild(a); a.click();
-            document.body.removeChild(a); URL.revokeObjectURL(url);
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
-
         function handleDownload(event) {
             const wrapper = event.currentTarget.closest('.log-container-wrapper');
             if (!wrapper) return;
@@ -573,7 +577,8 @@
                         translationElements.forEach((item, index) => {
                             item.select.value = targetLangs[index] || "";
                         });
-                        
+
+                        updateWindowsAndLayout();
                         updateAdditionalLanguagesUI();
                         updateTranslationTitles();
                     }
@@ -582,7 +587,10 @@
                         const updatedConfig = msg.translation;
                         languageEngineMap = updatedConfig.language_engine_map;
                         targetLangs = updatedConfig.target_langs;
+                        
+                        updateWindowsAndLayout();
                         updateAdditionalLanguagesUI();
+                        updateTranslationTitles();
                     }
                 } catch(err) { console.error("Error parsing msg:", err); }
             };
@@ -617,6 +625,7 @@
                 };
                 src.connect(worklet);
 
+                // [복원] 피크 미터 로직 (안전장치 포함)
                 const analyser = ac.createAnalyser();
                 analyser.fftSize = 1024;
                 src.connect(analyser);
@@ -630,7 +639,7 @@
 
                 const loop = () => {
                     if (!isStreaming) {
-                        console.log("스트리밍이 중지되어 피크 미터 루프를 종료합니다.");
+                        //console.log("스트리밍이 중지되어 피크 미터 루프를 종료합니다.");
                         return; 
                     }
                     analyser.getFloatTimeDomainData(buf);
@@ -646,7 +655,7 @@
                 
                 // 루프 시작
                 rafId = requestAnimationFrame(loop);
-  
+
                 isStreaming = true;
                 btnStop.disabled = false;
                 logSystemMessage("음성 입력을 시작했습니다.");
@@ -654,7 +663,7 @@
             } catch (err) { 
                 logSystemMessage("오디오 시작 오류: " + err.message);
                 await stopAudioStream();
-                btnStart.disabled = false; // [추가] 시작 실패 시 버튼 다시 활성화
+                btnStart.disabled = false;
             }
         }
 
@@ -700,6 +709,7 @@
         document.querySelectorAll('.download-btn').forEach(b => b.addEventListener('click', handleDownload));
         toggleCheckboxes.forEach(cb => { cb.onchange = updateWindowsAndLayout; });
 
+        // [중요] UI 업데이트 함수들 추가하여 변경 즉시 반영
         translationElements.forEach(item => {
             item.select.onchange = () => {
                 sendTranslationConfig();
