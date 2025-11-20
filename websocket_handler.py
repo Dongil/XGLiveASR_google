@@ -12,12 +12,28 @@ from typing import Dict, Set
 from aiohttp import web
 
 import config
-from config_manager import load_user_config, deep_update
+from config_manager import load_user_config, save_user_config, deep_update
 from stt_processor import google_stream_manager
 from translators import DeepLTranslator, PapagoTranslator, GoogleTranslator
 from db_manager import get_api_keys # [추가]
 
 CLIENTS: Dict[str, Set[web.WebSocketResponse]] = {}
+
+def get_translator_instance(engine_name, api_keys, google_creds_path):
+    """엔진 이름에 따라 번역기 인스턴스를 생성하여 반환"""
+    if engine_name == 'deepl':
+        key = api_keys.get('deepl_key') if api_keys else config.DEEPL_API_KEY
+        return DeepLTranslator(key)
+    elif engine_name == 'papago':
+        nid = api_keys.get('naver_id') if api_keys else config.NAVER_CLIENT_ID
+        nsecret = api_keys.get('naver_secret') if api_keys else config.NAVER_CLIENT_SECRET
+        return PapagoTranslator(nid, nsecret)
+    elif engine_name == 'google':
+        # [수정] 동적으로 생성된 경로를 직접 전달
+        if google_creds_path:
+            # GoogleTranslator 클래스는 credentials_path 인자를 받도록 수정되어 있어야 합니다.
+            return GoogleTranslator(credentials_path=google_creds_path)
+    return None
 
 async def ws_handler(request: web.Request):
     ws = web.WebSocketResponse(max_msg_size=8 * 1024 * 1024)
@@ -83,44 +99,53 @@ async def ws_handler(request: web.Request):
         logging.info(f"[{log_id}] [Broadcast] STT 전송 (to {len(stt_tasks)} clients): \"{sentence}\"")
 
         trans_cfg = client_config.get("translation", {})
-        engine_name, target_langs = trans_cfg.get("engine"), trans_cfg.get("target_langs", [])
+        target_langs = trans_cfg.get("target_langs", [])
+        lang_engine_map = trans_cfg.get("language_engine_map", {})
 
-        if not (engine_name and target_langs): return
-
-        # --- [수정] 번역기 초기화 시 동적 키 사용 ---
-        translator = None
-        try:
-            if engine_name == 'deepl':
-                deepl_key = api_keys.get('deepl_key') if api_keys else None
-                translator = DeepLTranslator(deepl_key or config.DEEPL_API_KEY)
-
-            elif engine_name == 'papago':
-                naver_id = api_keys.get('naver_id') if api_keys else None
-                naver_secret = api_keys.get('naver_secret') if api_keys else None
-                translator = PapagoTranslator(naver_id or config.NAVER_CLIENT_ID, naver_secret or config.NAVER_CLIENT_SECRET)
-
-            elif engine_name == 'google':
-                # --- [수정] google_creds_path를 직접 전달하여 번역기 생성 ---
-                translator = GoogleTranslator(credentials_path=google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS)                
-        except Exception as e: 
-            logging.error(f"[{log_id}] [Translate] '{engine_name}' 번역기 초기화 실패: {e}")
-            return # 번역기 생성 실패 시 더 이상 진행하지 않음
-
-        if not translator:
-            logging.warning(f"[{log_id}] [Translate] '{engine_name}' 번역기를 사용할 수 없거나 설정이 누락되었습니다.")
+        if not target_langs:
             return
+
+        translations = {}
+        tasks = []
+
+        for lang in target_langs:
+            engine_name = lang_engine_map.get(lang)
+            if not engine_name:
+                continue
+
+            # google_creds_path를 올바르게 전달하도록 수정
+            current_google_creds = google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS
+            translator = get_translator_instance(engine_name, api_keys, current_google_creds) 
             
-        translations = await asyncio.gather(*[translator.translate(sentence, lang) for lang in target_langs])
+            if translator:
+                tasks.append((lang, translator.translate(sentence, lang)))           
         
-        translation_payload = json.dumps({"type": "translation_update", "sentence_id": sentence_id, "translations": translations}, ensure_ascii=False)
+        if not tasks:
+            return
+
+        results = await asyncio.gather(*[task[1] for task in tasks], return_exceptions=True)
+
+        for i, task in enumerate(tasks):
+            lang_code = task[0]
+            if isinstance(results[i], Exception):
+                logging.error(f"[{log_id}] [Translate] 번역 중 오류 발생 ({lang_code}): {results[i]}")
+                translations[lang_code] = f"[{lang_code} 번역 실패]"
+            else:
+                translations[lang_code] = results[i]
+        
+        translation_payload = json.dumps({
+            "type": "translation_update", 
+            "sentence_id": sentence_id, 
+            "translations": translations
+        }, ensure_ascii=False)
+        
         trans_tasks = [client.send_str(translation_payload) for client in current_clients if not client.closed]
         
         if trans_tasks:
             await asyncio.gather(*trans_tasks, return_exceptions=True)
 
-        # --- [수정] 번역 결과 로그를 더 유용하게 변경 ---
-        trans_log_str = ", ".join([f"{lang}: \"{trans[:20]}...\"" for lang, trans in zip(target_langs, translations) if trans])
-        logging.info(f"[{log_id}] [Broadcast] 번역 전송 (to {len(trans_tasks)} clients): {trans_log_str}")
+        trans_log_str = ", ".join([f"'{k}': '{str(v)[:20]}...'" for k, v in translations.items()])
+        logging.info(f"[{log_id}] [Broadcast] 번역 전송 (to {len(trans_tasks)} clients): {{{trans_log_str}}}")
 
     await send_json({"type": "info", "text": "connected."})
     
@@ -134,18 +159,34 @@ async def ws_handler(request: web.Request):
     try:
         while not ws.closed:
             msg = await ws.receive()
+            
             if msg.type == web.WSMsgType.BINARY: 
                 await audio_queue.put(msg.data[4:])
             elif msg.type == web.WSMsgType.TEXT:
                 data = json.loads(msg.data)
-                # --- [추가] 클라이언트로부터 메시지 수신 로그 ---
                 msg_type = data.get("type", "unknown")
                 logging.info(f"[{log_id}] 클라이언트 메시지 수신 (type: {msg_type})")
+                
                 if msg_type == "get_config": 
+                    # load_user_config는 접속 시 한 번만 호출되므로 client_config를 바로 전송
                     await send_json({"type": "config", "data": client_config})
+
                 elif msg_type == "config":
+                    # 클라이언트에서 보낸 임시 설정 업데이트
                     deep_update(client_config, data.get("options", {}))
+                    # 이 설정은 현재 세션에서만 유효, 저장은 별도 요청으로 처리
                     await send_json({"type": "ack", "text": "config applied."})
+
+                # --- [신규] 설정 저장 요청 처리 ---
+                elif msg_type == "save_config":
+                    config_to_save = data.get("options", {})
+                    if save_user_config(user_id, config_to_save):
+                        # 저장 성공 시, 현재 세션의 설정도 즉시 업데이트
+                        deep_update(client_config, config_to_save)
+                        await send_json({"type": "ack", "text": "config saved successfully."})
+                    else:
+                        await send_json({"type": "error", "text": "config save failed."})
+                # --- 신규 로직 종료 ---
             elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED): break
     except Exception as e:
         # --- [추가] 웹소켓 루프에서 예외 발생 시 로그 기록 ---
