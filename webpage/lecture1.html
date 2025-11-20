@@ -1,0 +1,766 @@
+<!-- lecture1.html -->
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>실시간 음성인식 및 다중 번역 (Google STT)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- zip 파일 생성관련 라이브러리   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script> -->
+  <script src="/js/jszip310.js"></script>
+  <!-- QR 코드 생성을 위한 라이브러리  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script> -->
+  <script src="/js/qrcodejs10.js"></script>
+  <link rel="stylesheet" type="text/css" href="/css/fontstyle.css">
+  <style>
+   ::-webkit-scrollbar {display: none;} 
+    :root {
+      --bg-color: #1a1a1a; --card-bg-color: #2c2c2c; --text-color: #e0e0e0;
+      --text-color-strong: #f5f5f5; --border-color: #444; --control-bg-color: #3e3e3e;
+      --control-hover-bg-color: #4a4a4a; --log-wrapper-bg-color: #222;
+      --primary-color: #4a90e2; --primary-hover-color: #5aa1f2; --disabled-bg-color: #555;
+      --disabled-text-color: #999; --meter-bg-color: #444; --meter-bar-color: #4caf50;
+      --interim-text-color: #9e9e9e;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg-color: #f5f5f7; --card-bg-color: #ffffff; --text-color: #333333;
+        --text-color-strong: #111111; --border-color: #e0e0e0; --control-bg-color: #f1f3f5;
+        --control-hover-bg-color: #e9ecef; --log-wrapper-bg-color: #f8f9fa;
+        --disabled-bg-color: #e9ecef; --disabled-text-color: #aaaaaa; --meter-bg-color: #e0e0e0;
+        --interim-text-color: #757575;
+      }
+    }
+    html, body {
+      background-color: var(--bg-color); color: var(--text-color);
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      margin: 0; padding: 0; height: 100vh; box-sizing: border-box;
+      min-height: 450px; overflow: hidden;
+    }
+    h3 {
+      font-weight: 600; color: var(--text-color-strong); margin: 0; padding: 0; 
+      border: none;
+    }
+    .card {
+      background-color: var(--card-bg-color); border: 1px solid var(--border-color);
+      border-radius: 12px; padding: 1rem; box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .row { display: flex; flex-direction: column; gap: .5rem; }
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    label { font-size: 0.95rem; color: var(--text-color); }
+    select, button, textarea {
+      width: 100%; padding: 0.8rem; background-color: var(--control-bg-color); color: var(--text-color);
+      border: 1px solid var(--border-color); border-radius: 8px; font-size: 1rem; cursor: pointer;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+      box-sizing: border-box;
+    }
+    textarea { font-family: 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace; font-size: 0.9em; resize: vertical; min-height: 200px; }
+    textarea#systemLogTextarea { min-height: 100px; background-color: var(--log-wrapper-bg-color); cursor: default; }
+    button { background-color: var(--primary-color); border: none; font-weight: 600; }
+    button:hover:not(:disabled) { background-color: var(--primary-hover-color); }
+    button:disabled { background-color: var(--disabled-bg-color); cursor: not-allowed; color: var(--disabled-text-color); }
+    .meter { height: 12px; background: var(--meter-bg-color); border-radius: 6px; overflow: hidden; margin-top: 0.5rem; }
+    .bar { height: 100%; width: 0%; background: var(--meter-bar-color); transition: width .08s linear; }
+    .mono { font-family: 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace; font-size: 2.2em; }
+
+    .main-container {
+      display: grid; grid-template-columns: 380px 1fr; gap: 1rem;
+      height: calc(100vh - 2rem); position: relative; padding:1rem;
+      transition: grid-template-columns 0.4s ease-in-out;
+    }
+    .controls-card { 
+      position: relative; display: flex; flex-direction: column; 
+      gap: 1.2rem; overflow-y: auto; overflow-x: hidden;
+      transition: visibility 0.4s;
+    }
+    .main-container.sidebar-collapsed { grid-template-columns: 0 1fr; }
+    .main-container.sidebar-collapsed .controls-card { visibility: hidden; }
+    #sidebarToggleBtn {
+      position: absolute; top: 50%; left: 410px; transform: translate(-50%, -50%); z-index: 101;
+      width: 28px; height: 50px; padding: 0; border-radius: 0 8px 8px 0;
+      background-color: var(--control-hover-bg-color); border: 1px solid var(--border-color); border-left: none;
+      font-size: 1.2rem; display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: left 0.4s ease-in-out, background-color 0.2s ease; color: var(--text-color);
+    }
+    #sidebarToggleBtn:hover { background-color: var(--primary-color); }
+    .main-container.sidebar-collapsed #sidebarToggleBtn { left:10px; }
+    
+    .output-card { display: flex; flex-direction: column; overflow: hidden; min-height: 0; min-width:300px; }
+    .output-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap-reverse; }
+    .view-options { display: flex; gap: 1rem; flex-wrap: wrap; flex-grow: 1; }
+    .view-options label {
+        display: flex; align-items: center; gap: 0.4rem; cursor: pointer;
+        padding: 0.5rem 0.8rem; background-color: var(--control-bg-color); border-radius: 20px;
+    }
+    .output-grid { flex-grow: 1; display: grid; gap: 1rem; min-height: 0; }
+    .log-container-wrapper { display: flex; flex-direction: column; background-color: var(--log-wrapper-bg-color); border-radius: 8px; padding: 0.8rem; overflow: hidden; min-height: 0; }
+    .log-container-wrapper.hidden { display: none; }
+    .log-container { flex-grow: 1; font-family: 'Noto Sans KR'; font-weight:500; overflow-y: auto; line-height: 1.6; word-break: keep-all; min-height: 0; }
+	
+    .log-container {word-break: auto-phrase}
+    
+    .log-container p { position: relative; margin: 0 0 0.7em 0; padding-left: 1.2em; }
+    .log-container p::before {
+      content: ''; position: absolute; left: 0; top: 0.3em;
+      height: calc(100% - 0.4em); width: 3px; background-color: var(--primary-color); border-radius: 3px;
+    }
+    .log-container p.interim { color: var(--interim-text-color); }
+    .log-container p.interim::before { background-color: var(--interim-text-color); }
+    
+    .log-header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.8rem; margin-bottom: 0.8rem; }
+    .download-btn {
+      background: transparent; border: none; color: var(--text-color); width: 32px; height: 32px;
+      padding: 0; border-radius: 50%; font-size: 1.5rem; line-height: 1;
+      cursor: pointer; transition: background-color 0.2s ease, color 0.2s ease, visibility 0.2s;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      visibility: hidden;
+    }
+    .log-header.has-content .download-btn { visibility: visible; }
+    .download-btn:hover { background-color: var(--control-hover-bg-color); color: var(--text-color-strong); }
+
+    .section-header { 
+      display: flex; 
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .config-toggle-btn { width: 32px; height: 32px; padding: 0; flex-shrink: 0; font-size: 1.5rem; border-radius: 50%; }
+    .json-config-area { display: none; flex-direction: column; gap: 0.8rem; margin-top: 1rem; }
+    .json-config-area.visible { display: flex; }
+    .json-config-area .btn-row { grid-template-columns: repeat(3, 1fr); }
+    .json-config-area p { font-size: 0.8em; margin: 0; opacity: 0.7; text-align: center; }
+
+    #mobileControlsToggleBtn, #closeOverlayBtn { display: none; } 
+
+    .mobile-start-stop {
+        display: none;
+        gap: 1rem;
+    }
+    .mobile-start-stop button {
+        padding: 0.5rem 1rem;
+    }
+
+	 @media (max-width: 400px), (max-height: 400px) {
+		 
+     #sidebarToggleBtn { display: none; } 
+	 .main-container {padding:0.5rem;}
+	 
+	 }
+   
+    @media (max-width: 480px) {
+        .mono {
+            font-size: 1.1em;
+        }
+    }
+    .lang-tag {
+        background-color: var(--control-bg-color);
+        color: var(--text-color);
+        padding: 0.4rem 0.8rem;
+        border-radius: 15px;
+        font-size: 0.9em;
+    }
+    #engineConfigTable table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    #engineConfigTable th, #engineConfigTable td {
+        padding: 0.8rem;
+        text-align: left;
+        border-bottom: 1px solid var(--border-color);
+    }
+    #engineConfigTable th { font-weight: 600; }
+    #engineConfigTable label { margin-right: 1rem; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="main-container" id="mainContainer">
+    <div class="card controls-card" id="controlsCard">
+      <button id="closeOverlayBtn" aria-label="설정 닫기">&times;</button>
+      <input type="hidden" id="wsUrl" value="wss://ai1.xenoglobal.co.kr:9500/ws">
+      <section>
+        <div class="section-header">
+            <h3>장치 및 연결 설정</h3>
+            <button id="toggleJsonConfigBtn" class="config-toggle-btn" aria-label="JSON 설정 열기">&#9881;</button>
+            <!-- [추가] 학생용 QR 코드 보기 버튼 (index_vad_trans2_30_bro.php 참고) -->
+            <button id="showQrBtn" class="config-toggle-btn" aria-label="학생용 QR 코드 보기" style="margin-left: auto;">&#x25A3;</button>
+        </div>
+
+
+        <div id="jsonConfigArea" class="json-config-area">
+            <label for="systemLogTextarea" style="margin-top: 1rem;">시스템 로그</label>
+            <textarea id="systemLogTextarea" rows="6" readonly></textarea>
+            <p>※ 서버 연결 상태, 오류 등의 정보가 표시됩니다.</p>
+        </div>
+
+
+        <div class="row"> <label for="deviceSelect">장치 선택</label> <select id="deviceSelect"></select> </div>
+        <div class="meter"><div id="bar" class="bar"></div></div>
+        <div id="stat" class="mono" style="font-size: 0.8em; margin-top: 1rem; text-align: center;">-</div>
+        <div class="btn-row"> <button id="btnStart">시작</button> <button id="btnStop" disabled>중지</button> </div>
+      </section>
+      
+      <section>
+        <div class="section-header">
+            <h3>주요 번역 언어 설정</h3>
+            <button id="toggleEngineConfigBtn" class="config-toggle-btn" aria-label="언어별 엔진 설정 열기" title="언어별 엔진 설정">&#9881;</button>
+        </div>
+        <div class="row"> <label for="targetLanguage1">주요 번역 1</label> <select id="targetLanguage1"></select> </div>
+        <div class="row"> <label for="targetLanguage2">주요 번역 2</label> <select id="targetLanguage2"></select> </div>
+        <div class="row"> <label for="targetLanguage3">주요 번역 3</label> <select id="targetLanguage3"></select> </div>
+      </section>
+
+    <section id="additional-languages-section" style="display: none;">
+        <h3>추가 번역 언어 (학생 요청)</h3>
+        <div id="additional-languages-list" style="display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.5rem 0;"></div>
+    </section>
+
+      <section>
+        <h3>부가 기능</h3>
+        <div class="row">
+          <label for="recordAudioToggle" style="display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
+            <span>마이크 소리 녹음하기</span>
+            <input type="checkbox" id="recordAudioToggle">
+          </label>
+        </div>
+      </section>
+	  <h3 id="messageWindowHeader">메세지창</h3>
+	  <div class="output-header">
+        <div class="view-options">
+            <label><input type="checkbox" id="toggleOriginal" checked> 원본 (한국어)</label>
+            <label><input type="checkbox" id="toggleTranslated1" checked> 번역 1</label>
+            <label><input type="checkbox" id="toggleTranslated2" checked> 번역 2</label>
+            <label><input type="checkbox" id="toggleTranslated3" checked> 번역 3</label>
+        </div>
+        
+        <div style="display: none; gap: 1rem; align-items: center;">
+            <div class="mobile-start-stop">
+                <button id="btnStartMobile">시작</button>
+                <button id="btnStopMobile" disabled>중지</button>
+            </div>
+            <button id="mobileControlsToggleBtn">장치 및 설정</button>
+        </div>
+      </div>
+
+    </div>
+    
+    <button id="sidebarToggleBtn">&lt;</button>
+
+    <div class="card output-card">
+      
+      <div class="output-grid" id="outputGrid">
+        <div id="log-original-wrapper" class="log-container-wrapper">
+          <div class="log-header">
+            <h3 id="titleOriginal">메시지 원본 (한국어)</h3>
+            <button class="download-btn" data-target="log-original" aria-label="메시지 원본 다운로드">&#x2193;</button>
+          </div>
+          <div id="log-original" class="mono log-container"></div>
+        </div>
+        <div id="log-translated1-wrapper" class="log-container-wrapper">
+          <div class="log-header">
+            <h3 id="titleTranslated1">번역 결과 1</h3>
+            <button class="download-btn" data-target="log-translated1" aria-label="번역 결과 1 다운로드">&#x2193;</button>
+          </div>
+          <div id="log-translated1" class="mono log-container"></div>
+        </div>
+        <div id="log-translated2-wrapper" class="log-container-wrapper">
+          <div class="log-header">
+            <h3 id="titleTranslated2">번역 결과 2</h3>
+            <button class="download-btn" data-target="log-translated2" aria-label="번역 결과 2 다운로드">&#x2193;</button>
+          </div>
+          <div id="log-translated2" class="mono log-container"></div>
+        </div>
+        <div id="log-translated3-wrapper" class="log-container-wrapper">
+          <div class="log-header">
+            <h3 id="titleTranslated3">번역 결과 3</h3>
+            <button class="download-btn" data-target="log-translated3" aria-label="번역 결과 3 다운로드">&#x2193;</button>
+          </div>
+          <div id="log-translated3" class="mono log-container"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- [추가] QR 코드 표시를 위한 모달 창 (index_vad_trans2_30_bro.php 참고) -->
+  <div id="qrModal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.6); align-items: center; justify-content: center;">
+    <div id="qrModalContent" style="background-color: var(--card-bg-color); padding: 25px; border: 1px solid var(--border-color); border-radius: 12px; width: 90%; max-width: 450px; text-align: center; position: relative;">
+      <span id="closeQrModal" style="color: var(--text-color); position: absolute; top: 10px; right: 20px; font-size: 28px; font-weight: bold; cursor: pointer;">&times;</span>
+      <h3 style="margin-bottom: 1.2rem;">학생용 접속 QR 코드</h3>
+      <div id="qrCodeContainer" style="padding: 1rem; background-color: white; border-radius: 8px; display: inline-block;"></div>
+      <p style="margin-top: 1.2rem; font-size: 0.9em; color: var(--text-color); line-height: 1.5;">학생들은 이 QR 코드를 스캔하여<br>실시간 메시지를 확인할 수 있습니다.</p>
+    </div>
+  </div>
+
+  <div id="engineConfigModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000;">
+    <div class="card" style="width: 90%; max-width: 600px; max-height: 80vh; display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 0.8rem; margin-bottom: 1rem;">
+            <h3>언어별 번역 엔진 설정</h3>
+            <button id="closeEngineConfigModal" style="background: none; border: none; font-size: 1.8rem; cursor: pointer; padding: 0; line-height: 1; color: var(--text-color);">&times;</button>
+        </div>
+        <div id="engineConfigTable" style="overflow-y: auto; flex-grow: 1;"></div>
+        <div style="padding-top: 1rem; margin-top: auto; display: flex; justify-content: space-between; align-items: center;">
+           <button id="resetEngineConfigBtn" style="background: none; border: 1px solid var(--border-color); color: var(--text-color);">기본값으로 복원</button>
+           <button id="saveEngineConfigBtn" style="background-color: var(--primary-color); color: white; padding: 0.8rem 1.2rem; border: none; border-radius: 8px; cursor: pointer;">설정 저장</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- 1. Element Selectors ---
+        const mainContainer = document.getElementById('mainContainer');
+        const wsUrlEl = document.getElementById('wsUrl');
+        const btnStart = document.getElementById('btnStart');
+        const btnStop = document.getElementById('btnStop');
+        const deviceSelect = document.getElementById('deviceSelect');
+        const toggleJsonConfigBtn = document.getElementById('toggleJsonConfigBtn');
+        const jsonConfigArea = document.getElementById('jsonConfigArea');
+        const systemLogTextarea = document.getElementById('systemLogTextarea');
+        const recordAudioToggle = document.getElementById('recordAudioToggle');
+        const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
+        const toggleEngineConfigBtn = document.getElementById('toggleEngineConfigBtn');
+        const engineConfigModal = document.getElementById('engineConfigModal');
+        const closeEngineConfigModal = document.getElementById('closeEngineConfigModal');
+        const engineConfigTable = document.getElementById('engineConfigTable');
+        const saveEngineConfigBtn = document.getElementById('saveEngineConfigBtn');
+        const resetEngineConfigBtn = document.getElementById('resetEngineConfigBtn');
+        const additionalLanguagesSection = document.getElementById('additional-languages-section');
+        const additionalLanguagesList = document.getElementById('additional-languages-list');
+        const logElements = [ document.getElementById('log-original'), document.getElementById('log-translated1'), document.getElementById('log-translated2'), document.getElementById('log-translated3') ];
+        const logWrappers = [ document.getElementById('log-original-wrapper'), document.getElementById('log-translated1-wrapper'), document.getElementById('log-translated2-wrapper'), document.getElementById('log-translated3-wrapper') ];
+        const toggleCheckboxes = [ document.getElementById('toggleOriginal'), document.getElementById('toggleTranslated1'), document.getElementById('toggleTranslated2'), document.getElementById('toggleTranslated3') ];
+        const translationElements = [
+            { select: document.getElementById('targetLanguage1'), title: document.getElementById('titleTranslated1'), baseTitle: '번역 결과 1' },
+            { select: document.getElementById('targetLanguage2'), title: document.getElementById('titleTranslated2'), baseTitle: '번역 결과 2' },
+            { select: document.getElementById('targetLanguage3'), title: document.getElementById('titleTranslated3'), baseTitle: '번역 결과 3' }
+        ];
+
+        // --- 2. Data Definitions ---
+        const ALL_LANGUAGES = [ { code: "en", name: "English" }, { code: "ja", name: "Japanese" }, { code: "zh", name: "Chinese" }, { code: "vi", name: "Vietnamese" }, { code: "id", name: "Indonesian" }, { code: "th", name: "Thai" }, { code: "mn", name: "Mongolian" }, { code: "uz", name: "Uzbek" }, { code: "tr", name: "Turkish" }, { code: "de", name: "German" }, { code: "it", name: "Italian" }, { code: "fr", name: "French" }, { code: "es", name: "Spanish" }, { code: "ru", name: "Russian" }, { code: "pt", name: "Portuguese" } ];
+        const LANGUAGE_NAMES = Object.fromEntries(ALL_LANGUAGES.map(lang => [lang.code, lang.name]));
+        const ENGINE_SUPPORT_MAP = { 'deepl': ['en', 'ja', 'zh', 'vi', 'id', 'tr', 'de', 'it', 'fr', 'es', 'ru', 'pt'], 'papago': ['en', 'ja', 'zh', 'vi', 'id', 'th', 'de', 'it', 'fr', 'es', 'ru'], 'google': ['en', 'ja', 'zh', 'vi', 'id', 'th', 'mn', 'uz', 'tr', 'de', 'it', 'fr', 'es', 'ru', 'pt'] };
+        const ALL_ENGINES = ['deepl', 'papago', 'google'];
+        const workletCode = `class DownTo16k extends AudioWorkletProcessor{process(e){let l=e[0]?.[0];if(l){let t=new Int16Array(Math.floor(l.length/3));for(let s=0,a=0;s<t.length;s++,a+=3)t[s]=32767*Math.max(-1,Math.min(1,l[a]));this.port.postMessage(t,[t.buffer])}return!0}}registerProcessor("down-to-16k",DownTo16k);`;
+
+        // --- 3. Global State ---
+        let ws, ac, src, stream, worklet, rafId;
+        let bytesSent = 0, seq = 0;
+        let isStreaming = false;
+        let languageEngineMap = {};
+        let targetLangs = [];
+        let mediaRecorder = null, recordedChunks = [], recordingStarted = false;
+
+        // --- 4. Function Definitions ---
+        
+        function logSystemMessage(text) {
+            const timestamp = new Date().toLocaleTimeString();
+            systemLogTextarea.value += `[${timestamp}] ${text}\n`;
+            systemLogTextarea.scrollTop = systemLogTextarea.scrollHeight;
+        }
+
+        function populateLanguageSelectors() {
+            const optionsHtml = `<option value="">선택 안함</option>` + 
+                ALL_LANGUAGES.map(lang => `<option value="${lang.code}">${LANGUAGE_NAMES[lang.code]}</option>`).join('');
+            translationElements.forEach(item => item.select.innerHTML = optionsHtml);
+        }
+
+        function renderEngineConfigModal() {
+            let tableHtml = '<table><thead><tr><th>언어</th><th>번역 엔진</th></tr></thead><tbody>';
+            ALL_LANGUAGES.forEach(lang => {
+                tableHtml += `<tr><td>${LANGUAGE_NAMES[lang.code]}</td><td>`;
+                ALL_ENGINES.forEach(engine => {
+                    const isSupported = ENGINE_SUPPORT_MAP[engine].includes(lang.code);
+                    const isChecked = languageEngineMap[lang.code] === engine;
+                    tableHtml += `
+                        <label ${!isSupported ? 'style="opacity:0.5; cursor:not-allowed;"' : ''}>
+                            <input type="radio" name="engine_${lang.code}" value="${engine}" 
+                                   ${isChecked ? 'checked' : ''} ${!isSupported ? 'disabled' : ''}>
+                            ${engine.charAt(0).toUpperCase() + engine.slice(1)}
+                        </label>
+                    `;
+                });
+                tableHtml += '</td></tr>';
+            });
+            tableHtml += '</tbody></table>';
+            engineConfigTable.innerHTML = tableHtml;
+        }
+        
+        function updateAdditionalLanguagesUI() {
+            const majorLangs = translationElements.map(item => item.select.value);
+            const additionalLangs = targetLangs.filter(lang => !majorLangs.includes(lang));
+            if (additionalLangs.length > 0) {
+                additionalLanguagesList.innerHTML = additionalLangs.map(lang => 
+                    `<span class="lang-tag">${LANGUAGE_NAMES[lang] || lang}</span>`
+                ).join('');
+                additionalLanguagesSection.style.display = 'block';
+            } else {
+                additionalLanguagesSection.style.display = 'none';
+            }
+        }
+
+        function sendTranslationConfig() {
+            if (!ws || ws.readyState !== 1) return;
+            const majorLangs = translationElements.map(item => item.select.value).filter(lang => lang);
+            const studentLangs = targetLangs.filter(lang => !majorLangs.includes(lang));
+            const finalTargetLangs = [...new Set([...majorLangs, ...studentLangs])];
+
+            const options = { 
+                translation: { 
+                    language_engine_map: languageEngineMap,
+                    target_langs: finalTargetLangs
+                } 
+            };
+            ws.send(JSON.stringify({ type: "config", options }));
+            logSystemMessage("번역 설정을 서버로 임시 적용했습니다.");
+        }
+        
+        function updateWindowsAndLayout() {
+            const majorLangs = translationElements.map(item => item.select.value);
+            logWrappers[0].classList.toggle('hidden', !toggleCheckboxes[0].checked);
+            logWrappers.slice(1).forEach((wrapper, index) => {
+                const langIsSelected = majorLangs[index] && majorLangs[index] !== '';
+                const checkboxIsChecked = toggleCheckboxes[index + 1].checked;
+                wrapper.classList.toggle('hidden', !(langIsSelected && checkboxIsChecked));
+            });
+            updateOutputGridLayout();
+        }
+
+        function updateOutputGridLayout() {
+            const visibleCount = logWrappers.filter(w => !w.classList.contains('hidden')).length;
+            if (visibleCount === 0) return;
+            outputGrid.style.gridTemplateRows = '';
+            outputGrid.style.gridTemplateColumns = '';
+            if (window.innerWidth <= 900 || window.innerHeight <= 500) {
+                outputGrid.style.gridTemplateColumns = '1fr';
+                outputGrid.style.gridTemplateRows = `repeat(${visibleCount}, 1fr)`;
+            } else {
+                const numCols = visibleCount <= 2 ? visibleCount : 2;
+                const numRows = Math.ceil(visibleCount / numCols);
+                outputGrid.style.gridTemplateColumns = `repeat(${numCols}, 1fr)`;
+                outputGrid.style.gridTemplateRows = `repeat(${numRows}, 1fr)`;
+            }
+        }
+
+        function toggleSidebar() {
+            mainContainer.classList.toggle('sidebar-collapsed');
+            sidebarToggleBtn.innerHTML = mainContainer.classList.contains('sidebar-collapsed') ? '&gt;' : '&lt;';
+        }
+
+        function updateTranslationTitles() {
+            translationElements.forEach(item => {
+                const selectedOption = item.select.options[item.select.selectedIndex];
+                item.title.textContent = (selectedOption && selectedOption.value) ? `${item.baseTitle} - [${selectedOption.text}]` : item.baseTitle;
+            });
+        }
+
+        function clearLogs() {
+            logElements.forEach(el => {
+                el.innerHTML = '';
+                el.closest('.log-container-wrapper')?.querySelector('.log-header')?.classList.remove('has-content');
+            });
+        }
+
+        function sttInterimHandler(data) {
+            const container = logElements[0];
+            let p = container.querySelector('p.interim');
+            if (!data.text.trim()) { if (p) p.remove(); return; }
+            if (!p) { p = document.createElement('p'); p.classList.add('interim'); container.appendChild(p); }
+            p.textContent = data.text;
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function sttFinalHandler(data) {
+            const container = logElements[0];
+            const { sentence_id, text } = data;
+            let p = container.querySelector(`p[data-id="${sentence_id}"]`);
+            if (!p) {
+                p = document.createElement('p');
+                p.dataset.id = sentence_id;
+                const interimP = container.querySelector('p.interim');
+                if (interimP) container.insertBefore(p, interimP);
+                else container.appendChild(p);
+            }
+            p.textContent = text;
+            if (text.trim()) container.closest('.log-container-wrapper').querySelector('.log-header').classList.add('has-content');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function translationHandler(data) {
+            const { sentence_id, translations } = data;
+            const majorLangs = translationElements.map(item => item.select.value);
+            Object.entries(translations).forEach(([langCode, transText]) => {
+                const index = majorLangs.indexOf(langCode);
+                if (index !== -1) {
+                    const container = logElements[index + 1];
+                    if (!container || !transText) return;
+                    let p = container.querySelector(`p[data-id="${sentence_id}"]`);
+                    if (!p) { p = document.createElement('p'); p.dataset.id = sentence_id; container.appendChild(p); }
+                    p.textContent = transText;
+                    container.closest('.log-container-wrapper').querySelector('.log-header').classList.add('has-content');
+                    container.scrollTop = container.scrollHeight;
+                }
+            });
+        }
+
+        async function listDevices() {
+            try {
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                deviceSelect.innerHTML = "";
+                devices.filter(d => d.kind === "audioinput").forEach(d => {
+                    const opt = document.createElement("option");
+                    opt.value = d.deviceId;
+                    opt.textContent = d.label || `마이크 (${d.deviceId.slice(0, 6)})`;
+                    deviceSelect.appendChild(opt);
+                });
+            } catch (e) { console.warn("마이크 장치를 찾을 수 없습니다:", e); }
+        }
+
+        function getLogContent(logContainer) {
+            return Array.from(logContainer.querySelectorAll('p:not(.interim)')).map(p => p.textContent).join('\n');
+        }
+
+        function downloadFile(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a); URL.revokeObjectURL(url);
+        }
+
+        function handleDownload(event) {
+            const wrapper = event.currentTarget.closest('.log-container-wrapper');
+            if (!wrapper) return;
+            const logContainer = wrapper.querySelector('.log-container');
+            const titleElement = wrapper.querySelector('h3');
+            if (!logContainer || !titleElement) return;
+            const content = getLogContent(logContainer);
+            if (!content) { alert('다운로드할 내용이 없습니다.'); return; }
+            const filename = titleElement.textContent.trim().replace(/[\s\[\]]/g, '_') + '.txt';
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            downloadFile(blob, filename);
+        }
+
+        // --- 5. Core Logic Functions ---
+
+        function connectWebSocket() {
+            logSystemMessage("서버에 연결 중...");
+            if (ws) { ws.onclose = null; ws.close(); }
+
+            ws = new WebSocket(wsUrlEl.value);
+            ws.binaryType = "arraybuffer";
+            
+            ws.onopen = () => {
+                logSystemMessage("서버에 연결되었습니다.");
+                ws.send(JSON.stringify({ type: "get_config" }));
+            };
+            ws.onclose = () => {
+                logSystemMessage("서버와 연결이 끊어졌습니다. 3초 후 재연결합니다...");
+                setTimeout(connectWebSocket, 3000);
+            };
+            ws.onerror = () => { logSystemMessage("WebSocket 오류 발생."); ws.close(); };
+            
+            ws.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    
+                    if (msg.type === "info" || msg.type === "ack") logSystemMessage(msg.text);
+                    else if (msg.type === "stt_interim") sttInterimHandler(msg);
+                    else if (msg.type === "stt_final") sttFinalHandler(msg);
+                    else if (msg.type === "translation_update") translationHandler(msg);
+                    else if (msg.type === "config" && msg.data) {
+                        logSystemMessage("서버 설정을 성공적으로 불러왔습니다.");
+                        const translationConfig = msg.data?.translation || {};
+                        languageEngineMap = translationConfig.language_engine_map || {};
+                        targetLangs = translationConfig.target_langs || [];
+                        
+                        translationElements.forEach((item, index) => {
+                            item.select.value = targetLangs[index] || "";
+                        });
+                        
+                        updateAdditionalLanguagesUI();
+                        updateTranslationTitles();
+                    }
+                    else if (msg.type === "translation_config_updated") {
+                        logSystemMessage("번역 설정이 동적으로 업데이트되었습니다.");
+                        const updatedConfig = msg.translation;
+                        languageEngineMap = updatedConfig.language_engine_map;
+                        targetLangs = updatedConfig.target_langs;
+                        updateAdditionalLanguagesUI();
+                    }
+                } catch(err) { console.error("Error parsing msg:", err); }
+            };
+        }
+
+        async function startAudioStream() {
+            if (isStreaming) return;
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                logSystemMessage("서버에 연결되지 않았습니다. 잠시 후 다시 시도해주세요.");
+                return;
+            }
+            btnStart.disabled = true;
+            logSystemMessage("음성 스트림을 시작합니다...");
+
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceSelect.value }, sampleRate: 48000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }});
+                
+                ac = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+                await ac.audioWorklet.addModule(URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' })));
+                
+                src = ac.createMediaStreamSource(stream);
+                worklet = new AudioWorkletNode(ac, 'down-to-16k');
+                worklet.port.onmessage = (e) => {
+                    if (!ws || ws.readyState !== 1 || !isStreaming) return;
+                    const pcm = new Int16Array(e.data);
+                    const header = new ArrayBuffer(4); new DataView(header).setUint32(0, seq++);
+                    const payload = new Uint8Array(header.byteLength + pcm.byteLength);
+                    payload.set(new Uint8Array(header), 0);
+                    payload.set(new Uint8Array(pcm.buffer), header.byteLength);
+                    ws.send(payload);
+                    bytesSent += payload.byteLength;
+                };
+                src.connect(worklet);
+
+                const analyser = ac.createAnalyser();
+                analyser.fftSize = 1024;
+                src.connect(analyser);
+                const buf = new Float32Array(analyser.fftSize);
+
+                // 이전에 실행중인 loop가 있다면 확실히 종료
+                if (rafId) {
+                    cancelAnimationFrame(rafId);
+                    rafId = null;
+                }
+
+                const loop = () => {
+                    if (!isStreaming) {
+                        console.log("스트리밍이 중지되어 피크 미터 루프를 종료합니다.");
+                        return; 
+                    }
+                    analyser.getFloatTimeDomainData(buf);
+                    const rms = Math.sqrt(buf.reduce((s, v) => s + v * v, 0) / buf.length);
+                    const width = Math.min(100, Math.max(0, (20 * Math.log10(rms) + 60) * (100 / 60)));
+                    
+                    document.getElementById('bar').style.width = width + "%";
+                    document.getElementById('stat').textContent = `Sent: ${(bytesSent / 1024).toFixed(1)} KB`;
+                    
+                    // 다음 프레임 요청
+                    rafId = requestAnimationFrame(loop);
+                };
+                
+                // 루프 시작
+                rafId = requestAnimationFrame(loop);
+  
+                isStreaming = true;
+                btnStop.disabled = false;
+                logSystemMessage("음성 입력을 시작했습니다.");
+
+            } catch (err) { 
+                logSystemMessage("오디오 시작 오류: " + err.message);
+                await stopAudioStream();
+                btnStart.disabled = false; // [추가] 시작 실패 시 버튼 다시 활성화
+            }
+        }
+
+        async function stopAudioStream() {
+            if (!isStreaming) return;
+            isStreaming = false;
+            btnStop.disabled = true;
+            logSystemMessage("음성 스트림을 중지합니다...");
+
+            if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+            if (ac) { if (ac.state !== 'closed') await ac.close().catch(console.warn); ac = null; }
+            if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+            
+            btnStart.disabled = false;
+            document.getElementById('bar').style.width = "0%";
+            logSystemMessage("음성 스트림이 중지되었습니다.");
+        }
+        
+        // --- 6. Main Initialization & Event Handlers ---
+        
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const wsParams = new URLSearchParams();
+            if (params.has('id')) wsParams.set('id', params.get('id'));
+            if (params.has('user')) wsParams.set('user', params.get('user'));
+            const wsQueryString = wsParams.toString();
+            if (wsQueryString) {
+                wsUrlEl.value = `${wsUrlEl.value.split('?')[0]}?${wsQueryString}`;
+            }
+        } catch (e) { console.error("URL 파라미터 처리 중 오류:", e); }
+        
+        engineConfigModal.style.display = 'none';
+        listDevices(); 
+        populateLanguageSelectors();
+        updateWindowsAndLayout();
+        connectWebSocket();
+
+        btnStart.onclick = startAudioStream;
+        btnStop.onclick = stopAudioStream;
+        sidebarToggleBtn.onclick = toggleSidebar;
+        toggleJsonConfigBtn.onclick = () => jsonConfigArea.classList.toggle('visible');
+        
+        document.querySelectorAll('.download-btn').forEach(b => b.addEventListener('click', handleDownload));
+        toggleCheckboxes.forEach(cb => { cb.onchange = updateWindowsAndLayout; });
+
+        translationElements.forEach(item => {
+            item.select.onchange = () => {
+                sendTranslationConfig();
+                updateWindowsAndLayout();
+                updateTranslationTitles();
+            };
+        });
+
+        toggleEngineConfigBtn.onclick = () => {
+            renderEngineConfigModal();
+            engineConfigModal.style.display = 'flex';
+        };
+        closeEngineConfigModal.onclick = () => {
+            engineConfigModal.style.display = 'none';
+        };
+        
+        saveEngineConfigBtn.onclick = () => {
+            const newMap = {};
+            ALL_LANGUAGES.forEach(lang => {
+                const selectedEngine = document.querySelector(`input[name="engine_${lang.code}"]:checked`)?.value;
+                if (selectedEngine) newMap[lang.code] = selectedEngine;
+            });
+            const options = { translation: { language_engine_map: newMap, target_langs: targetLangs } };
+            if (!ws || ws.readyState !== 1) { logSystemMessage("서버 연결 안됨. 설정 저장 불가."); return; }
+            ws.send(JSON.stringify({ type: "save_config", options: options }));
+            languageEngineMap = newMap;
+            logSystemMessage("서버에 설정을 저장 요청했습니다.");
+            engineConfigModal.style.display = 'none';
+        };
+
+        resetEngineConfigBtn.onclick = () => {
+            const defaultMap = {};
+            ALL_LANGUAGES.forEach(lang => { defaultMap[lang.code] = 'google'; });
+            languageEngineMap = defaultMap;
+            renderEngineConfigModal();
+            logSystemMessage("설정을 기본값으로 복원했습니다. '설정 저장'을 눌러 서버에 반영하세요.");
+        };
+
+        window.addEventListener('resize', updateOutputGridLayout);
+        
+        const showQrBtn = document.getElementById('showQrBtn');
+        const qrModal = document.getElementById('qrModal');
+        const closeQrModal = document.getElementById('closeQrModal');
+        const qrCodeContainer = document.getElementById('qrCodeContainer');
+        let qrCodeInstance = null;
+        showQrBtn.onclick = () => {
+            const currentUrl = new URL(window.location.href);
+            const viewerParams = new URLSearchParams(currentUrl.search);
+            const viewerPageName = 'viewer.html';
+            const viewerUrl = `${currentUrl.origin}${currentUrl.pathname.substring(0, currentUrl.pathname.lastIndexOf('/'))}/${viewerPageName}?${viewerParams.toString()}`;
+            if (qrCodeContainer) {
+                qrCodeContainer.innerHTML = '';
+                if (qrCodeInstance) qrCodeInstance.clear();
+                qrCodeInstance = new QRCode(qrCodeContainer, { text: viewerUrl, width: 384, height: 384, colorDark : "#000000", colorLight : "#ffffff", correctLevel : QRCode.CorrectLevel.H });
+            }
+            if (qrModal) qrModal.style.display = 'flex';
+        };
+        closeQrModal.onclick = () => { if (qrModal) qrModal.style.display = 'none'; };
+        window.onclick = (event) => { if (event.target == qrModal) qrModal.style.display = 'none'; };
+    });
+</script>
+
+</body>
+</html>
