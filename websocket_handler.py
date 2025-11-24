@@ -172,7 +172,6 @@ async def ws_handler(request: web.Request):
 
                 elif msg_type == "change_translate_langs":
                     # 교수 페이지에서 학생 요청 언어를 추가하여 전체 번역언어 변경 정보 전송됨
-                    # current_target_langs = client_config.get("target_langs", {})
                     received_data =  data.get("options", {})
 
                     update_data = {
@@ -190,6 +189,18 @@ async def ws_handler(request: web.Request):
                     for client in CLIENTS.get(user_id, []):
                         if client is not ws: # 나 자신에게는 보내지 않음 (이미 ack 받음)
                             asyncio.create_task(client.send_str(update_payload))
+                
+                elif msg_type == "join_new_viewer":
+                    # 학생 페이지에서 클라이언트가 처음 접속 할 경우
+                    # 처음 접속시 현재 아이디의 저장된 설정을 전송합니다.
+                    await send_json({"type": "config", "data": client_config})
+
+                    # 그후 교수페이지의 번역언어 변동 상황을 받을 수 있도록 요청한다.
+                    status_payload = json.dumps({ "type": msg_type }, ensure_ascii=False)
+
+                    for client in CLIENTS.get(user_id, []):
+                        if client is not ws: # 나 자신에게는 보내지 않음
+                            asyncio.create_task(client.send_str(status_payload)) 
 
                 elif msg_type == "request_language_add":
                     # 학생 페이지에서 언어 추가 요청이 들어오면 교수 페이지에서 추가 번역될 수 있도록 전달                       

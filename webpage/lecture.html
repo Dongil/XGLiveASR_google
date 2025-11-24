@@ -580,6 +580,14 @@
                         updateAdditionalLanguagesUI();
                         updateTranslationTitles();
                     }
+                    else if(msg.type === "join_new_viewer") { 
+                        const options = { 
+                            target_langs: targetLangs
+                        };
+
+                        ws.send(JSON.stringify({ type: "change_translate_langs", options }));
+                        logSystemMessage("새로운 학생 클라이언트가 접속하였습니다.");
+                    }
                     else if(msg.type === "request_language_add") {                       
                         const majorLangs = translationElements.map(item => item.select.value).filter(lang => lang);
                         const studentLangs = targetLangs.filter(lang => !majorLangs.includes(lang));

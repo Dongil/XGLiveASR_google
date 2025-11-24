@@ -244,20 +244,22 @@
   <input type="hidden" id="wsUrl" value="wss://ai1.xenoglobal.co.kr:9500/ws">
 <script>
     document.addEventListener('DOMContentLoaded', () => {
+        // --- 1. Element Selectors & Initial Setup ---
         const root = document.documentElement;
         const outputGrid = document.getElementById('outputGrid');
         const wsUrlEl = document.getElementById('wsUrl');
         const addLangSelect = document.getElementById('addLangSelect');
         const addLangBtn = document.getElementById('addLangBtn');
+        const viewOptionsContainer = document.getElementById('viewOptions'); 
         
         const logInfo = [
             { id: 'original', langCode: 'ko', wrapper: document.getElementById('log-original-wrapper'), logEl: document.getElementById('log-original'), titleEl: document.getElementById('titleOriginal'), toggleLabel: document.getElementById('toggle-label-original'), toggleCheck: document.getElementById('toggle-original') }
         ];
         
         const translationWindows = [
-            { id: 'translated1', langCode: null, wrapper: document.getElementById('log-translated1-wrapper'), logEl: document.getElementById('log-translated1'), titleEl: document.getElementById('titleTranslated1'), toggleLabel: document.getElementById('toggle-label-translated1'), toggleCheck: document.getElementById('toggle-translated1') },
-            { id: 'translated2', langCode: null, wrapper: document.getElementById('log-translated2-wrapper'), logEl: document.getElementById('log-translated2'), titleEl: document.getElementById('titleTranslated2'), toggleLabel: document.getElementById('toggle-label-translated2'), toggleCheck: document.getElementById('toggle-translated2') },
-            { id: 'translated3', langCode: null, wrapper: document.getElementById('log-translated3-wrapper'), logEl: document.getElementById('log-translated3'), titleEl: document.getElementById('titleTranslated3'), toggleLabel: document.getElementById('toggle-label-translated3'), toggleCheck: document.getElementById('toggle-translated3') }
+            { id: 'translated1', langCode: null, wrapper: document.getElementById('log-translated1-wrapper'), logEl: document.getElementById('log-translated1'), titleEl: document.getElementById('titleTranslated1') },
+            { id: 'translated2', langCode: null, wrapper: document.getElementById('log-translated2-wrapper'), logEl: document.getElementById('log-translated2'), titleEl: document.getElementById('titleTranslated2') },
+            { id: 'translated3', langCode: null, wrapper: document.getElementById('log-translated3-wrapper'), logEl: document.getElementById('log-translated3'), titleEl: document.getElementById('titleTranslated3') }
         ];
 
         const fontIncreaseBtn = document.getElementById('fontIncreaseBtn');
@@ -265,41 +267,132 @@
         
         let ws;
         let currentFontSize = parseFloat(getComputedStyle(root).getPropertyValue('--viewer-font-size'));
-        let currentTargetLangs = []; // 현재 설정된 언어 목록 저장
-        let requestTargetLangs = []; // 추가 요청한 언어 목록 저장
+        let currentTargetLangs = []; 
+        
+        // [신규] 모든 메시지 기록 저장소
+        const messageHistory = [];
 
         const ALL_LANGUAGES = [
-            { code: "en", name: "English" }, { code: "ja", name: "Japanese" },
-            { code: "zh", name: "Chinese" }, { code: "vi", name: "Vietnamese" },
-            { code: "id", name: "Indonesian" }, { code: "th", name: "Thai" },
-            { code: "mn", name: "Mongolian" }, { code: "uz", name: "Uzbek" },
-            { code: "tr", name: "Turkish" }, { code: "de", name: "German" },
-            { code: "it", name: "Italian" }, { code: "fr", name: "French" },
-            { code: "es", name: "Spanish" }, { code: "ru", name: "Russian" },
-            { code: "pt", name: "Portuguese" }
+            { code: "en", name: "English" }, { code: "ja", name: "Japanese" }, { code: "zh", name: "Chinese" }, { code: "vi", name: "Vietnamese" }, { code: "id", name: "Indonesian" }, { code: "th", name: "Thai" }, { code: "mn", name: "Mongolian" }, { code: "uz", name: "Uzbek" }, { code: "tr", name: "Turkish" }, { code: "de", name: "German" }, { code: "it", name: "Italian" }, { code: "fr", name: "French" }, { code: "es", name: "Spanish" }, { code: "ru", name: "Russian" }, { code: "pt", name: "Portuguese" }
         ];
         const LANGUAGE_NAMES = Object.fromEntries(ALL_LANGUAGES.map(lang => [lang.code, lang.name]));
 
         // --- 2. Function Definitions ---
 
-        function updateWindowsAndLayout() {
-            [...logInfo, ...translationWindows].forEach(info => {
-                if (info.toggleCheck && info.wrapper) {
-                    if (info.id.startsWith('translated') && !info.langCode) {
-                        info.wrapper.classList.add('hidden');
-                    } else {
-                        info.wrapper.classList.toggle('hidden', !info.toggleCheck.checked);
-                    }
+        // [신규] 메시지 렌더링 공통 함수
+        function renderMessage(msg, targetWindow) {
+            const container = targetWindow.logEl;
+            let text = "";
+            let sentenceId = msg.sentence_id;
+
+            if (msg.type === 'stt_final') {
+                text = msg.text;
+            } else if (msg.type === 'translation_update') {
+                // 해당 창의 언어 코드에 맞는 번역 텍스트 가져오기
+                text = msg.translations[targetWindow.langCode];
+            }
+
+            if (!text) return;
+
+            let p = container.querySelector(`p[data-id="${sentenceId}"]`);
+            if (!p) {
+                p = document.createElement('p');
+                p.dataset.id = sentenceId;
+                p.textContent = text;
+                container.appendChild(p);
+            } else {
+                p.textContent = text;
+            }
+            // 자동 스크롤
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function renderLanguageToggles() {
+            const existingToggles = viewOptionsContainer.querySelectorAll('.dynamic-toggle');
+            existingToggles.forEach(el => el.remove());
+
+            const originalLabel = document.getElementById('toggle-label-original');
+            if (originalLabel) originalLabel.classList.add('visible');
+
+            currentTargetLangs.forEach(langCode => {
+                const label = document.createElement('label');
+                label.className = 'toggle-label visible dynamic-toggle';
+                
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.dataset.lang = langCode;
+                
+                const isAssigned = translationWindows.some(win => win.langCode === langCode);
+                input.checked = isAssigned;
+
+                const span = document.createElement('span');
+                span.textContent = LANGUAGE_NAMES[langCode] || langCode;
+
+                label.appendChild(input);
+                label.appendChild(span);
+                viewOptionsContainer.appendChild(label);
+
+                input.addEventListener('change', (e) => {
+                    handleLanguageToggle(langCode, e.target.checked, e.target);
+                });
+            });
+        }
+
+        function handleLanguageToggle(langCode, isChecked, checkboxEl) {
+            if (isChecked) {
+                const emptyWindow = translationWindows.find(win => win.langCode === null);
+                if (emptyWindow) {
+                    assignLanguageToWindow(emptyWindow, langCode);
+                } else {
+                    alert("최대 3개의 번역 언어만 동시에 볼 수 있습니다.\n다른 언어를 먼저 끄고 선택해주세요.");
+                    checkboxEl.checked = false;
+                }
+            } else {
+                const targetWindow = translationWindows.find(win => win.langCode === langCode);
+                if (targetWindow) {
+                    clearWindow(targetWindow);
+                }
+            }
+            updateWindowsAndLayout();
+        }
+
+        function assignLanguageToWindow(win, langCode) {
+            win.logEl.innerHTML = ''; // 기존 내용 비우기
+            win.langCode = langCode;
+            win.titleEl.textContent = LANGUAGE_NAMES[langCode] || langCode;
+            win.wrapper.classList.remove('hidden');
+            
+            // [핵심] 저장된 기록에서 해당 언어의 메시지들을 복원하여 다시 그림
+            messageHistory.forEach(msg => {
+                if (msg.type === 'translation_update') {
+                    renderMessage(msg, win);
                 }
             });
+        }
 
-            const visibleWrappers = [...logInfo, ...translationWindows].map(info => info.wrapper).filter(wrapper => wrapper && !wrapper.classList.contains('hidden'));
-            const visibleCount = visibleWrappers.length;
+        function clearWindow(win) {
+            win.langCode = null;
+            win.wrapper.classList.add('hidden');
+            win.logEl.innerHTML = ''; // 내용 비움 (어차피 다시 켤 때 history에서 복원됨)
+        }
+
+        function updateWindowsAndLayout() {
+            const originalToggle = document.getElementById('toggle-original');
+            if (originalToggle) {
+                logInfo[0].wrapper.classList.toggle('hidden', !originalToggle.checked);
+            }
+
+            const visibleWrappers = [
+                logInfo[0].wrapper,
+                ...translationWindows.map(w => w.wrapper)
+            ].filter(wrapper => !wrapper.classList.contains('hidden'));
             
-            if (visibleCount === 0) return;
+            const visibleCount = visibleWrappers.length;
             
             outputGrid.style.gridTemplateRows = '';
             outputGrid.style.gridTemplateColumns = '';
+            
+            if (visibleCount === 0) return;
             
             if (window.innerWidth <= 900 || window.innerHeight <= 500 || visibleCount <= 2) {
                 outputGrid.style.gridTemplateColumns = '1fr';
@@ -322,93 +415,54 @@
         }
 
         function sttFinalHandler(data) {
-            const container = logInfo[0].logEl;
-            const oldInterim = container.querySelector('p.interim');
-            if (oldInterim) oldInterim.remove();
-
-            let p = container.querySelector(`p[data-id="${data.sentence_id}"]`);
-            if (!p) {
-                p = document.createElement('p');
-                p.dataset.id = data.sentence_id;
-                p.textContent = data.text;
-                container.appendChild(p);
-            } else {
-                p.textContent = data.text;
-            }
-            container.scrollTop = container.scrollHeight;
+            // 1. 원본 창에 그리기
+            renderMessage(data, logInfo[0]);
+            
+            // 2. 기록 저장
+            messageHistory.push(data);
         }
 
         function translationHandler(data) {
-            const { sentence_id, translations } = data;
-            
-            // 자동 복구 로직
-            Object.keys(translations).forEach(langCode => {
-                const windowInfo = translationWindows.find(w => w.langCode === langCode);
-                if (!windowInfo) {
-                    const emptyWindow = translationWindows.find(w => w.langCode === null);
-                    if (emptyWindow) {
-                        emptyWindow.langCode = langCode;
-                        emptyWindow.titleEl.textContent = LANGUAGE_NAMES[langCode] || langCode;
-                        emptyWindow.toggleLabel.querySelector('span').textContent = LANGUAGE_NAMES[langCode] || langCode;
-                        emptyWindow.toggleLabel.classList.add('visible');
-                        emptyWindow.toggleCheck.checked = true;
-                        updateWindowsAndLayout();
-                    }
-                }
-            });
+            // 1. 기록 저장
+            messageHistory.push(data);
 
-            Object.entries(translations).forEach(([langCode, transText]) => {
-                const windowInfo = translationWindows.find(w => w.langCode === langCode);
-                if (windowInfo && transText) {
-                    const container = windowInfo.logEl;
-                    let p = container.querySelector(`p[data-id="${sentence_id}"]`);
-                    if (!p) {
-                        p = document.createElement('p');
-                        p.dataset.id = sentence_id;
-                        p.textContent = transText;
-                        container.appendChild(p);
-                    } else {
-                        p.textContent = transText;
-                    }
-                    container.scrollTop = container.scrollHeight;
+            // 2. 현재 활성화된 모든 번역 창에 그리기
+            translationWindows.forEach(win => {
+                if (win.langCode) { // 언어가 할당된 창에만
+                    renderMessage(data, win);
                 }
             });
         }
         
         function setupUIWithConfig(langs) {
-            currentTargetLangs = langs; // 현재 설정 저장
-
-            logInfo[0].toggleLabel.classList.add('visible');
-            logInfo[0].toggleCheck.checked = true;
-
-            translationWindows.forEach((win, index) => {
-                const langCode = currentTargetLangs[index];
-                if (langCode) {
-                    win.langCode = langCode;
-                    const langName = LANGUAGE_NAMES[langCode] || langCode;
-                    win.titleEl.textContent = langName;
-                    win.toggleLabel.querySelector('span').textContent = langName;
-                    win.toggleLabel.classList.add('visible');
-                    
-                    if(win.wrapper.classList.contains('hidden')) {
-                        win.toggleCheck.checked = true;
-                    }
-                } else {
-                    win.langCode = null;
-                    win.toggleLabel.classList.remove('visible');
-                    win.toggleCheck.checked = false;
-                    win.wrapper.classList.add('hidden');
+            currentTargetLangs = langs || [];
+            
+            // 동기화: 목록에 없는 언어 제거
+            translationWindows.forEach(win => {
+                if (win.langCode && !currentTargetLangs.includes(win.langCode)) {
+                    clearWindow(win);
                 }
             });
+
+            // 자동 할당: 빈 창에 새 언어 할당
+            currentTargetLangs.forEach(lang => {
+                const isAssigned = translationWindows.some(win => win.langCode === lang);
+                if (!isAssigned) {
+                    const emptyWindow = translationWindows.find(win => win.langCode === null);
+                    if (emptyWindow) {
+                        assignLanguageToWindow(emptyWindow, lang);
+                    }
+                }
+            });
+
+            renderLanguageToggles(); 
+            updateAddLangSelect();
             updateWindowsAndLayout();
-            updateAddLangSelect(); // 언어 추가 셀렉트 박스 업데이트
         }
 
-        // [신규] 언어 추가 셀렉트 박스 업데이트
         function updateAddLangSelect() {
             addLangSelect.innerHTML = '<option value="">언어 선택</option>';
             ALL_LANGUAGES.forEach(lang => {
-                // 이미 번역 중인 언어는 제외
                 if (!currentTargetLangs.includes(lang.code)) {
                     const option = document.createElement('option');
                     option.value = lang.code;
@@ -418,7 +472,6 @@
             });
         }
 
-        // [신규] 언어 추가 요청 전송
         function requestAddLanguage() {
             const request_lang = addLangSelect.value;
             if (!request_lang) {
@@ -426,7 +479,10 @@
                 return;
             }
             
-            requestTargetLangs.push(request_lang);
+            const activeCount = translationWindows.filter(w => w.langCode !== null).length;
+            if (activeCount >= 3) {
+                alert("현재 3개의 번역 창이 모두 사용 중입니다.\n번역 언어가 추가되면 상단 목록에는 나타나지만,\n화면에 보려면 기존 번역 언어 창 하나를 끄셔야 합니다.");
+            }
             ws.send(JSON.stringify({ type: "request_language_add", request_lang }));
         }
 
@@ -437,7 +493,7 @@
 
             ws.onopen = () => {
                 console.log("WebSocket connected.");
-                ws.send(JSON.stringify({ type: "get_config" }));                  
+                ws.send(JSON.stringify({ type: "join_new_viewer" }));                  
             };
             
             ws.onclose = () => {
@@ -454,30 +510,23 @@
                     else if (msg.type === "stt_final") sttFinalHandler(msg);
                     else if (msg.type === "translation_update") translationHandler(msg);
                     else if (msg.type === "config") {
-                        // 처음 접속시 환경 설정 받음
                         const config = msg.data;
-                        
                         let targetLangs = [];
                         if (config && config.translation && Array.isArray(config.translation.target_langs)) {
                             targetLangs = config.translation.target_langs;
                         } else if (config && Array.isArray(config.target_langs)) {
                             targetLangs = config.target_langs;
                         }
-
                         setupUIWithConfig(targetLangs);
                     }
                     else if (msg.type === "change_translate_langs") {                        
-                        // 교수 페이지에서 번역 언어 변경시                         
                         const langs = msg.data;
-
                         let targetLangs = [];
                         if (langs && Array.isArray(langs.target_langs)) {
                             targetLangs = langs.target_langs;
                         }
-
                         setupUIWithConfig(targetLangs);
                     }
-                    
                 } catch (err) {
                     console.error("Error parsing server message:", err);
                 }
@@ -510,13 +559,12 @@
             console.error("Error processing URL parameters:", e);
         }
         
-        [...logInfo, ...translationWindows].forEach(info => {
-            if(info.toggleCheck) {
-                info.toggleCheck.addEventListener('change', () => {
-                    updateWindowsAndLayout();
-                });
-            }
-        });
+        const originalToggle = document.getElementById('toggle-original');
+        if(originalToggle) {
+            originalToggle.addEventListener('change', () => {
+                updateWindowsAndLayout();
+            });
+        }
 
         fontIncreaseBtn.addEventListener('click', () => {
             if (currentFontSize < 3.0) {
@@ -531,7 +579,6 @@
             }
         });
         
-        // [신규] 추가 버튼 이벤트 핸들러
         addLangBtn.addEventListener('click', () => {
             requestAddLanguage();
         });
