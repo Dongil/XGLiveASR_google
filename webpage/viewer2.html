@@ -1,0 +1,591 @@
+<!-- viewer2.html -->
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>실시간 메시지 뷰어 (Google STT)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" type="text/css" href="/css/fontstyle.css">
+  <style>
+    ::-webkit-scrollbar {display: none;} 
+    :root {
+      --bg-color: #1a1a1a; --card-bg-color: #2c2c2c; --text-color: #e0e0e0;
+      --text-color-strong: #f5f5f5; --border-color: #444; --control-bg-color: #3e3e3e;
+      --control-hover-bg-color: #4a4a4a; --log-wrapper-bg-color: #222;
+      --primary-color: #4a90e2; --primary-hover-color: #5aa1f2;
+      --viewer-font-size: 1.2em;
+      --interim-text-color: #9e9e9e;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg-color: #f5f5f7; --card-bg-color: #ffffff; --text-color: #333333;
+        --text-color-strong: #111111; --border-color: #e0e0e0; --control-bg-color: #f1f3f5;
+        --control-hover-bg-color: #e9ecef; --log-wrapper-bg-color: #f8f9fa;
+        --interim-text-color: #757575;
+      }
+    }
+    html, body {
+      background-color: var(--bg-color); color: var(--text-color);
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      margin: 0; padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    h3 {
+      font-weight: 600; color: var(--text-color-strong); margin: 0; padding: 0; 
+      border: none;
+    }
+    .card {
+      background-color: var(--card-bg-color); border: 1px solid var(--border-color);
+      border-radius: 12px; padding: 1rem; box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .mono { 
+        font-family: 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace; 
+        font-size: var(--viewer-font-size); 
+    }
+    .main-container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      padding: 1rem;
+      gap: 1rem;
+      box-sizing: border-box;
+    }
+    .output-card { 
+      display: flex; 
+      flex-direction: column; 
+      overflow: hidden; 
+      flex-grow: 1;
+      min-height: 0;
+    }
+    .output-grid { 
+      flex-grow: 1; 
+      display: grid; 
+      gap: 1rem; 
+      min-height: 0;
+      overflow-y: auto;
+      padding-bottom: 5rem;
+    }
+    .log-container-wrapper { display: flex; flex-direction: column; background-color: var(--log-wrapper-bg-color); border-radius: 8px; padding: 0.8rem; overflow: hidden; min-height: 200px; }
+    .log-container-wrapper.hidden { display: none; }
+    .log-container { 
+      flex-grow: 1; 
+      font-family: 'Noto Sans KR'; 
+      font-weight:500; 
+      overflow-y: auto;
+      line-height: 1.6; 
+      word-break: keep-all; 
+      min-height: 0;
+      padding-bottom: 1rem;
+    }
+    .log-container p { position: relative; margin: 0 0 0.7em 0; padding-left: 1.2em; }
+    .log-container p::before {
+      content: ''; position: absolute; left: 0; top: 0.3em;
+      height: calc(100% - 0.4em); width: 3px; background-color: var(--primary-color); border-radius: 3px;
+    }
+    .log-container p.interim { color: var(--interim-text-color); }
+    .log-container p.interim::before { background-color: var(--interim-text-color); }
+
+    .log-header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.8rem; margin-bottom: 0.8rem; }
+    
+    .controls-wrapper {
+        flex-shrink: 0;
+    }
+    .controls-card {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+        justify-content: space-between; /* 양쪽 정렬로 변경 */
+    }
+    .view-options, .font-controls {
+        display: flex;
+        gap: 0.8rem;
+        align-items: center;
+    }
+    /* [신규] 언어 추가 컨트롤 스타일 */
+    .add-lang-controls {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .add-lang-select {
+        padding: 0.5rem;
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+        background-color: var(--control-bg-color);
+        color: var(--text-color);
+    }
+    .add-lang-btn {
+        padding: 0.5rem 1rem;
+        border-radius: 8px;
+        border: none;
+        background-color: var(--primary-color);
+        color: white;
+        cursor: pointer;
+        font-weight: 600;
+    }
+    .add-lang-btn:hover {
+        background-color: var(--primary-hover-color);
+    }
+
+    .toggle-label {
+        display: none;
+        align-items: center; gap: 0.4rem; cursor: pointer;
+        padding: 0.5rem 0.8rem; background-color: var(--control-bg-color); 
+        border: 1px solid var(--border-color); border-radius: 20px;
+        font-size: 0.9em;
+        transition: background-color 0.2s, border-color 0.2s;
+    }
+    .toggle-label.visible {
+        display: flex;
+    }
+    .toggle-label:hover {
+        background-color: var(--control-hover-bg-color);
+    }
+    .toggle-label input[type="checkbox"] {
+        display: none;
+    }
+    .toggle-label input[type="checkbox"]:checked + span {
+        font-weight: bold;
+        color: var(--primary-color);
+    }
+    .font-control-btn {
+        width: 38px; height: 38px; padding: 0;
+        font-size: 1.4rem; font-weight: bold; border-radius: 50%;
+        background-color: var(--control-bg-color); border: 1px solid var(--border-color);
+        color: var(--text-color); cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .font-control-btn:hover {
+        background-color: var(--control-hover-bg-color);
+    }
+
+    @media (max-width: 768px) {
+        :root {
+            --viewer-font-size: 1.0em;
+        }
+        .controls-card { flex-direction: column; align-items: stretch; gap: 1rem; }
+        .view-options { justify-content: center; flex-wrap: wrap; }
+        .add-lang-controls { justify-content: center; }
+        .font-controls { justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <div class="main-container" id="mainContainer">
+    <div class="controls-wrapper">
+        <div class="card controls-card">
+            <div id="viewOptions" class="view-options">
+                <label id="toggle-label-original" class="toggle-label">
+                    <input type="checkbox" id="toggle-original" checked>
+                    <span>원본</span>
+                </label>
+                <label id="toggle-label-translated1" class="toggle-label">
+                    <input type="checkbox" id="toggle-translated1" checked>
+                    <span>번역1</span>
+                </label>
+                <label id="toggle-label-translated2" class="toggle-label">
+                    <input type="checkbox" id="toggle-translated2" checked>
+                    <span>번역2</span>
+                </label>
+                <label id="toggle-label-translated3" class="toggle-label">
+                    <input type="checkbox" id="toggle-translated3" checked>
+                    <span>번역3</span>
+                </label>
+            </div>
+
+            <!-- [신규] 언어 추가 컨트롤 -->
+            <div class="add-lang-controls">
+                <span style="font-size: 0.9rem; font-weight: 600;">추가 번역 : </span>
+                <select id="addLangSelect" class="add-lang-select">
+                    <option value="">언어 선택</option>
+                    <!-- JS로 옵션 추가 -->
+                </select>
+                <button id="addLangBtn" class="add-lang-btn">추가</button>
+            </div>
+
+            <div class="font-controls">
+                <button id="fontDecreaseBtn" class="font-control-btn" aria-label="글자 작게">-</button>
+                <button id="fontIncreaseBtn" class="font-control-btn" aria-label="글자 크게">+</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card output-card">
+      <div class="output-grid" id="outputGrid">
+        <div id="log-original-wrapper" class="log-container-wrapper hidden">
+          <div class="log-header">
+            <h3 id="titleOriginal">메시지 원본 (한국어)</h3>
+          </div>
+          <div id="log-original" class="mono log-container"></div>
+        </div>
+        <div id="log-translated1-wrapper" class="log-container-wrapper hidden">
+          <div class="log-header">
+            <h3 id="titleTranslated1">번역 결과 1</h3>
+          </div>
+          <div id="log-translated1" class="mono log-container"></div>
+        </div>
+        <div id="log-translated2-wrapper" class="log-container-wrapper hidden">
+          <div class="log-header">
+            <h3 id="titleTranslated2">번역 결과 2</h3>
+          </div>
+          <div id="log-translated2" class="mono log-container"></div>
+        </div>
+        <div id="log-translated3-wrapper" class="log-container-wrapper hidden">
+          <div class="log-header">
+            <h3 id="titleTranslated3">번역 결과 3</h3>
+          </div>
+          <div id="log-translated3" class="mono log-container"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <input type="hidden" id="wsUrl" value="wss://ai1.xenoglobal.co.kr:9500/ws">
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- 1. Element Selectors & Initial Setup ---
+        const root = document.documentElement;
+        const outputGrid = document.getElementById('outputGrid');
+        const wsUrlEl = document.getElementById('wsUrl');
+        const addLangSelect = document.getElementById('addLangSelect');
+        const addLangBtn = document.getElementById('addLangBtn');
+        const viewOptionsContainer = document.getElementById('viewOptions'); 
+        
+        const logInfo = [
+            { id: 'original', langCode: 'ko', wrapper: document.getElementById('log-original-wrapper'), logEl: document.getElementById('log-original'), titleEl: document.getElementById('titleOriginal'), toggleLabel: document.getElementById('toggle-label-original'), toggleCheck: document.getElementById('toggle-original') }
+        ];
+        
+        const translationWindows = [
+            { id: 'translated1', langCode: null, wrapper: document.getElementById('log-translated1-wrapper'), logEl: document.getElementById('log-translated1'), titleEl: document.getElementById('titleTranslated1') },
+            { id: 'translated2', langCode: null, wrapper: document.getElementById('log-translated2-wrapper'), logEl: document.getElementById('log-translated2'), titleEl: document.getElementById('titleTranslated2') },
+            { id: 'translated3', langCode: null, wrapper: document.getElementById('log-translated3-wrapper'), logEl: document.getElementById('log-translated3'), titleEl: document.getElementById('titleTranslated3') }
+        ];
+
+        const fontIncreaseBtn = document.getElementById('fontIncreaseBtn');
+        const fontDecreaseBtn = document.getElementById('fontDecreaseBtn');
+        
+        let ws;
+        let currentFontSize = parseFloat(getComputedStyle(root).getPropertyValue('--viewer-font-size'));
+        let currentTargetLangs = []; 
+        
+        // [신규] 모든 메시지 기록 저장소
+        const messageHistory = [];
+
+        const ALL_LANGUAGES = [
+            { code: "en", name: "English" }, { code: "ja", name: "Japanese" }, { code: "zh", name: "Chinese" }, { code: "vi", name: "Vietnamese" }, { code: "id", name: "Indonesian" }, { code: "th", name: "Thai" }, { code: "mn", name: "Mongolian" }, { code: "uz", name: "Uzbek" }, { code: "tr", name: "Turkish" }, { code: "de", name: "German" }, { code: "it", name: "Italian" }, { code: "fr", name: "French" }, { code: "es", name: "Spanish" }, { code: "ru", name: "Russian" }, { code: "pt", name: "Portuguese" }
+        ];
+        const LANGUAGE_NAMES = Object.fromEntries(ALL_LANGUAGES.map(lang => [lang.code, lang.name]));
+
+        // --- 2. Function Definitions ---
+
+        // [신규] 메시지 렌더링 공통 함수
+        function renderMessage(msg, targetWindow) {
+            const container = targetWindow.logEl;
+            let text = "";
+            let sentenceId = msg.sentence_id;
+
+            if (msg.type === 'stt_final') {
+                text = msg.text;
+            } else if (msg.type === 'translation_update') {
+                // 해당 창의 언어 코드에 맞는 번역 텍스트 가져오기
+                text = msg.translations[targetWindow.langCode];
+            }
+
+            if (!text) return;
+
+            let p = container.querySelector(`p[data-id="${sentenceId}"]`);
+            if (!p) {
+                p = document.createElement('p');
+                p.dataset.id = sentenceId;
+                p.textContent = text;
+                container.appendChild(p);
+            } else {
+                p.textContent = text;
+            }
+            // 자동 스크롤
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function renderLanguageToggles() {
+            const existingToggles = viewOptionsContainer.querySelectorAll('.dynamic-toggle');
+            existingToggles.forEach(el => el.remove());
+
+            const originalLabel = document.getElementById('toggle-label-original');
+            if (originalLabel) originalLabel.classList.add('visible');
+
+            currentTargetLangs.forEach(langCode => {
+                const label = document.createElement('label');
+                label.className = 'toggle-label visible dynamic-toggle';
+                
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.dataset.lang = langCode;
+                
+                const isAssigned = translationWindows.some(win => win.langCode === langCode);
+                input.checked = isAssigned;
+
+                const span = document.createElement('span');
+                span.textContent = LANGUAGE_NAMES[langCode] || langCode;
+
+                label.appendChild(input);
+                label.appendChild(span);
+                viewOptionsContainer.appendChild(label);
+
+                input.addEventListener('change', (e) => {
+                    handleLanguageToggle(langCode, e.target.checked, e.target);
+                });
+            });
+        }
+
+        function handleLanguageToggle(langCode, isChecked, checkboxEl) {
+            if (isChecked) {
+                const emptyWindow = translationWindows.find(win => win.langCode === null);
+                if (emptyWindow) {
+                    assignLanguageToWindow(emptyWindow, langCode);
+                } else {
+                    alert("최대 3개의 번역 언어만 동시에 볼 수 있습니다.\n다른 언어를 먼저 끄고 선택해주세요.");
+                    checkboxEl.checked = false;
+                }
+            } else {
+                const targetWindow = translationWindows.find(win => win.langCode === langCode);
+                if (targetWindow) {
+                    clearWindow(targetWindow);
+                }
+            }
+            updateWindowsAndLayout();
+        }
+
+        function assignLanguageToWindow(win, langCode) {
+            win.logEl.innerHTML = ''; // 기존 내용 비우기
+            win.langCode = langCode;
+            win.titleEl.textContent = LANGUAGE_NAMES[langCode] || langCode;
+            win.wrapper.classList.remove('hidden');
+            
+            // [핵심] 저장된 기록에서 해당 언어의 메시지들을 복원하여 다시 그림
+            messageHistory.forEach(msg => {
+                if (msg.type === 'translation_update') {
+                    renderMessage(msg, win);
+                }
+            });
+        }
+
+        function clearWindow(win) {
+            win.langCode = null;
+            win.wrapper.classList.add('hidden');
+            win.logEl.innerHTML = ''; // 내용 비움 (어차피 다시 켤 때 history에서 복원됨)
+        }
+
+        function updateWindowsAndLayout() {
+            const originalToggle = document.getElementById('toggle-original');
+            if (originalToggle) {
+                logInfo[0].wrapper.classList.toggle('hidden', !originalToggle.checked);
+            }
+
+            const visibleWrappers = [
+                logInfo[0].wrapper,
+                ...translationWindows.map(w => w.wrapper)
+            ].filter(wrapper => !wrapper.classList.contains('hidden'));
+            
+            const visibleCount = visibleWrappers.length;
+            
+            outputGrid.style.gridTemplateRows = '';
+            outputGrid.style.gridTemplateColumns = '';
+            
+            if (visibleCount === 0) return;
+            
+            if (window.innerWidth <= 900 || window.innerHeight <= 500 || visibleCount <= 2) {
+                outputGrid.style.gridTemplateColumns = '1fr';
+                outputGrid.style.gridTemplateRows = `repeat(${visibleCount}, 1fr)`;
+            } else {
+                const numCols = 2;
+                const numRows = Math.ceil(visibleCount / numCols);
+                outputGrid.style.gridTemplateColumns = `repeat(${numCols}, 1fr)`;
+                outputGrid.style.gridTemplateRows = `repeat(${numRows}, 1fr)`;
+            }
+        }
+        
+        function sttInterimHandler(data) {
+            const container = logInfo[0].logEl;
+            let p = container.querySelector('p.interim');
+            if (!data.text.trim()) { if (p) p.remove(); return; }
+            if (!p) { p = document.createElement('p'); p.classList.add('interim'); container.appendChild(p); }
+            p.textContent = data.text;
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function sttFinalHandler(data) {
+            // 1. 원본 창에 그리기
+            renderMessage(data, logInfo[0]);
+            
+            // 2. 기록 저장
+            messageHistory.push(data);
+        }
+
+        function translationHandler(data) {
+            // 1. 기록 저장
+            messageHistory.push(data);
+
+            // 2. 현재 활성화된 모든 번역 창에 그리기
+            translationWindows.forEach(win => {
+                if (win.langCode) { // 언어가 할당된 창에만
+                    renderMessage(data, win);
+                }
+            });
+        }
+        
+        function setupUIWithConfig(langs) {
+            currentTargetLangs = langs || [];
+            
+            // 동기화: 목록에 없는 언어 제거
+            translationWindows.forEach(win => {
+                if (win.langCode && !currentTargetLangs.includes(win.langCode)) {
+                    clearWindow(win);
+                }
+            });
+
+            // 자동 할당: 빈 창에 새 언어 할당
+            currentTargetLangs.forEach(lang => {
+                const isAssigned = translationWindows.some(win => win.langCode === lang);
+                if (!isAssigned) {
+                    const emptyWindow = translationWindows.find(win => win.langCode === null);
+                    if (emptyWindow) {
+                        assignLanguageToWindow(emptyWindow, lang);
+                    }
+                }
+            });
+
+            renderLanguageToggles(); 
+            updateAddLangSelect();
+            updateWindowsAndLayout();
+        }
+
+        function updateAddLangSelect() {
+            addLangSelect.innerHTML = '<option value="">언어 선택</option>';
+            ALL_LANGUAGES.forEach(lang => {
+                if (!currentTargetLangs.includes(lang.code)) {
+                    const option = document.createElement('option');
+                    option.value = lang.code;
+                    option.textContent = lang.name;
+                    addLangSelect.appendChild(option);
+                }
+            });
+        }
+
+        function requestAddLanguage() {
+            const request_lang = addLangSelect.value;
+            if (!request_lang) {
+                alert("추가할 언어를 선택해주세요.");
+                return;
+            }
+            
+            const activeCount = translationWindows.filter(w => w.langCode !== null).length;
+            if (activeCount >= 3) {
+                alert("현재 3개의 번역 창이 모두 사용 중입니다.\n번역 언어가 추가되면 상단 목록에는 나타나지만,\n화면에 보려면 기존 번역 언어 창 하나를 끄셔야 합니다.");
+            }
+            ws.send(JSON.stringify({ type: "request_language_add", request_lang }));
+        }
+
+        function connectWebSocket(url) {
+            if (ws) { ws.close(); }
+            ws = new WebSocket(url);
+            ws.binaryType = "arraybuffer"; 
+
+            ws.onopen = () => {
+                console.log("WebSocket connected.");
+                ws.send(JSON.stringify({ type: "join_new_viewer" }));                  
+            };
+            
+            ws.onclose = () => {
+                setTimeout(() => connectWebSocket(url), 3000);
+            };
+            
+            ws.onerror = (e) => { console.error("WebSocket error:", e); ws.close(); };
+            
+            ws.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    
+                    if (msg.type === "stt_interim") sttInterimHandler(msg);
+                    else if (msg.type === "stt_final") sttFinalHandler(msg);
+                    else if (msg.type === "translation_update") translationHandler(msg);
+                    else if (msg.type === "config") {
+                        const config = msg.data;
+                        let targetLangs = [];
+                        if (config && config.translation && Array.isArray(config.translation.target_langs)) {
+                            targetLangs = config.translation.target_langs;
+                        } else if (config && Array.isArray(config.target_langs)) {
+                            targetLangs = config.target_langs;
+                        }
+                        setupUIWithConfig(targetLangs);
+                    }
+                    else if (msg.type === "change_translate_langs") {                        
+                        const langs = msg.data;
+                        let targetLangs = [];
+                        if (langs && Array.isArray(langs.target_langs)) {
+                            targetLangs = langs.target_langs;
+                        }
+                        setupUIWithConfig(targetLangs);
+                    }
+                } catch (err) {
+                    console.error("Error parsing server message:", err);
+                }
+            };
+        }
+        
+        // --- 3. Main Initialization ---
+        
+        const baseUrl = wsUrlEl.value;
+        let finalWsUrl = baseUrl;
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const wsParams = new URLSearchParams();
+            if (params.has('id')) wsParams.set('id', params.get('id'));
+            if (params.has('user')) wsParams.set('user', params.get('user'));
+            
+            const wsQueryString = wsParams.toString();
+            if (wsQueryString) {
+                finalWsUrl = `${baseUrl.split('?')[0]}?${wsQueryString}`;
+                document.title = `${document.title} (ID: ${params.get('id')})`;
+                connectWebSocket(finalWsUrl);
+            } else {
+                logInfo[0].wrapper.classList.remove('hidden');
+                logInfo[0].toggleLabel.classList.add('visible');
+                const p = document.createElement('p');
+                p.textContent = "오류: 강의 ID가 지정되지 않았습니다.";
+                logInfo[0].logEl.appendChild(p);
+            }
+        } catch (e) {
+            console.error("Error processing URL parameters:", e);
+        }
+        
+        const originalToggle = document.getElementById('toggle-original');
+        if(originalToggle) {
+            originalToggle.addEventListener('change', () => {
+                updateWindowsAndLayout();
+            });
+        }
+
+        fontIncreaseBtn.addEventListener('click', () => {
+            if (currentFontSize < 3.0) {
+                currentFontSize += 0.1;
+                root.style.setProperty('--viewer-font-size', `${currentFontSize.toFixed(1)}em`);
+            }
+        });
+        fontDecreaseBtn.addEventListener('click', () => {
+            if (currentFontSize > 0.5) { 
+                currentFontSize -= 0.1;
+                root.style.setProperty('--viewer-font-size', `${currentFontSize.toFixed(1)}em`);
+            }
+        });
+        
+        addLangBtn.addEventListener('click', () => {
+            requestAddLanguage();
+        });
+
+        updateWindowsAndLayout();
+        window.addEventListener('resize', updateWindowsAndLayout);
+    });
+</script>
+</body>
+</html>
