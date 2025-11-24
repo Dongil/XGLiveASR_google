@@ -399,15 +399,13 @@
             if (!ws || ws.readyState !== 1) return;
             targetLangs = [];
             const majorLangs = translationElements.map(item => item.select.value).filter(lang => lang);
-            //const studentLangs = targetLangs.filter(lang => !majorLangs.includes(lang));
-            //const finalTargetLangs = [...new Set([...majorLangs, ...studentLangs])];
 
             targetLangs = majorLangs;
 
             const options = { 
                 translation: { 
                     language_engine_map: languageEngineMap,
-                    target_langs: targetLangs
+                    target_langs: targetLangs                    
                 } 
             };
             ws.send(JSON.stringify({ type: "save_config", options }));
@@ -582,15 +580,25 @@
                         updateAdditionalLanguagesUI();
                         updateTranslationTitles();
                     }
-                    else if (msg.type === "translation_config_updated") {
-                        logSystemMessage("번역 설정이 동적으로 업데이트되었습니다.");
-                        const updatedConfig = msg.translation;
-                        languageEngineMap = updatedConfig.language_engine_map;
-                        targetLangs = updatedConfig.target_langs;
+                    else if(msg.type === "request_language_add") {                       
+                        const majorLangs = translationElements.map(item => item.select.value).filter(lang => lang);
+                        const studentLangs = targetLangs.filter(lang => !majorLangs.includes(lang));
+                        studentLangs.push(msg.request_lang);
                         
+                        const finalTargetLangs = [...new Set([...majorLangs, ...studentLangs])];
+
+                        targetLangs = finalTargetLangs;
+
+                        const options = { 
+                            target_langs: targetLangs
+                        };
+
                         updateWindowsAndLayout();
                         updateAdditionalLanguagesUI();
                         updateTranslationTitles();
+
+                        ws.send(JSON.stringify({ type: "change_translate_langs", options }));
+                        logSystemMessage(msg.request_lang + " 학생 페이지에서 번역 언어를 추가 요청하였습니다.");
                     }
                 } catch(err) { console.error("Error parsing msg:", err); }
             };

@@ -65,15 +65,9 @@ async def ws_handler(request: web.Request):
     log_id = f"{log_id_base} ({client_count})"
     logging.info(f"[{log_id}] 클라이언트 연결됨. 총 {client_count}명")
 
-    # [중요] 파일에서 설정을 로드하지만, 이미 메모리에 로드된 설정이 있다면 그것을 공유해야 할 수도 있습니다.
-    # 하지만 현재 구조(ws_handler 함수 내 지역 변수)에서는 각 연결마다 설정을 따로 로드합니다.
-    # 따라서 교수가 설정을 저장(save)하면 파일이 업데이트되고, 학생이 새로 접속할 때(load) 업데이트된 파일을 읽게 됩니다.
-    # 실시간 동기화를 위해 save 시점에 브로드캐스트가 필수적입니다.
     client_config = load_user_config(user_id)
     audio_queue = asyncio.Queue()
-
-    # viewer_lang 관련 로직은 제거되었습니다.
-
+  
     async def send_json(data):
         if not ws.closed:
             try: await ws.send_str(json.dumps(data, ensure_ascii=False))
@@ -126,6 +120,9 @@ async def ws_handler(request: web.Request):
             "translations": translations
         }, ensure_ascii=False)
         
+        # 번역내용 확인
+        # logging.info(f"{translations}") 
+
         trans_tasks = [client.send_str(translation_payload) for client in current_clients if not client.closed]
         if trans_tasks:
             await asyncio.gather(*trans_tasks, return_exceptions=True)
@@ -152,35 +149,58 @@ async def ws_handler(request: web.Request):
                 msg_type = data.get("type", "unknown")
                 
                 if msg_type == "get_config": 
-                    # 현재 로드된 설정을 전송합니다.
+                    # 처음 접속시 현재 로드된 설정을 전송합니다.
                     await send_json({"type": "config", "data": client_config})
 
-                elif msg_type == "config":
-                    logging.info(f"전송된 설정 확인 : {data.get("options", {})}")
-                    deep_update(client_config, data.get("options", {}))
-                    await send_json({"type": "ack", "text": "config applied."})
-
                 elif msg_type == "save_config":
+                    # 교수 페이지의 엔진맵, 주 번역언어를 환경 설정에 저장한다.
                     config_to_save = data.get("options", {})
-                    
-                    logging.info(f"전송된 설정 확인 : {config_to_save}")
 
                     if save_user_config(user_id, config_to_save):
                         # 1. 현재 연결의 설정 업데이트
                         deep_update(client_config, config_to_save)
-                        await send_json({"type": "ack", "text": "saved."})
-                        
-                        # 2. [핵심 추가] 동일 user_id의 다른 모든 클라이언트(학생 등)에게 설정 변경 전파
-                        update_payload = json.dumps({
-                            "type": "translation_config_updated",
-                            "translation": client_config["translation"]
-                        }, ensure_ascii=False)
-                        
-                        for client in CLIENTS.get(user_id, []):
-                            if client is not ws: # 나 자신에게는 보내지 않음 (이미 ack 받음)
-                                asyncio.create_task(client.send_str(update_payload))
+                        await send_json({"type": "ack", "text": "saved."})                        
                     else:
                         await send_json({"type": "error", "text": "save failed."})
+
+                    # 동일 user_id의 다른 모든 클라이언트(학생 등)에게 설정 변경 전파
+                    update_payload = json.dumps({ "type": "config", "data": config_to_save }, ensure_ascii=False)
+                    
+                    for client in CLIENTS.get(user_id, []):
+                        if client is not ws: # 나 자신에게는 보내지 않음 (이미 ack 받음)
+                            asyncio.create_task(client.send_str(update_payload))
+
+                elif msg_type == "change_translate_langs":
+                    # 교수 페이지에서 학생 요청 언어를 추가하여 전체 번역언어 변경 정보 전송됨
+                    # current_target_langs = client_config.get("target_langs", {})
+                    received_data =  data.get("options", {})
+
+                    update_data = {
+                        "translation": {
+                            "target_langs": received_data.get("target_langs", [])
+                        }
+                    }
+
+                    deep_update(client_config, update_data)
+                    await send_json({"type": "ack", "text": "config applied."})
+                    
+                    # 동일 user_id의 다른 모든 클라이언트(학생 등)에게 번역 언어 변경 전파
+                    update_payload = json.dumps({ "type": msg_type, "data": received_data }, ensure_ascii=False)
+                    
+                    for client in CLIENTS.get(user_id, []):
+                        if client is not ws: # 나 자신에게는 보내지 않음 (이미 ack 받음)
+                            asyncio.create_task(client.send_str(update_payload))
+
+                elif msg_type == "request_language_add":
+                    # 학생 페이지에서 언어 추가 요청이 들어오면 교수 페이지에서 추가 번역될 수 있도록 전달                       
+                    update_payload = json.dumps({
+                        "type": msg_type,
+                        "request_lang": data.get("request_lang", {})
+                    }, ensure_ascii=False)
+
+                    for client in CLIENTS.get(user_id, []):
+                        if client is not ws: # 나 자신에게는 보내지 않음
+                            asyncio.create_task(client.send_str(update_payload))             
 
             elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED): break
     except Exception as e:
