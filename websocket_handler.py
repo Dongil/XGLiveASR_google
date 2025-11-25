@@ -34,6 +34,8 @@ async def ws_handler(request: web.Request):
     # 'user' 파라미터를 읽고, 없으면 None으로 설정
     user_group_raw = request.query.get("user", "")
     user_group = re.sub(r'[^a-zA-Z0-9_\-]', '', user_group_raw) if user_group_raw else None
+
+    logging.info(f"user_id : {user_id}, user_group : {user_group}")
     
     # --- [추가] 동적 키 및 임시 파일 관리를 위한 변수 ---
     api_keys = await get_api_keys(user_group) if user_group else None
