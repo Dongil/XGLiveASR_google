@@ -80,7 +80,7 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
             #       하지만 초기값이 없어 UnboundLocalError가 발생하고 스트림이 종료됩니다.
             # [해결] 'nonlocal' 키워드를 사용하여 이 변수가 바깥 함수인 google_stream_processor의
             #       변수임을 명시적으로 알려줍니다. 이제 정상적으로 바깥 함수의 변수 값을 수정할 수 있습니다.
-            nonlocal total_audio_bytes_sent
+            nonlocal total_audio_bytes_sent, total_transcript_chars, total_transcript_bytes
 
             while True:
                 try:
@@ -219,6 +219,14 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
                 start_date_string, 
                 end_date_string)
             bInsert = await insert_use_google_stt_data(insert_use_data)
+
+            total_audio_bytes_sent = 0
+            total_transcript_chars = 0
+            total_transcript_bytes = 0
+            total_audio_kb = 0
+            total_audio_seconds = 0
+            total_transcript_kb = 0
+            total_transcript_chars = 0;
 
 # --- [수정] google_creds_path 인자 추가 및 전달 ---
 async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path: str | None):
