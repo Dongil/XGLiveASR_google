@@ -83,3 +83,78 @@ async def get_api_keys(user_group: str) -> dict | None:
     except Exception as e:
         logging.error(f"[{user_group}] [DB] API 키 조회 중 오류 발생: {e}")
         return None
+
+async def insert_use_google_stt_data(data: tuple) -> bool:
+    """
+    user_group(i_key)을 기반으로 사용 데이터를 저장함.
+    입력 data 순서 예상: (utd_user, utd_id, utd_sent_data_second, utd_sent_datas, utd_received, utd_transcript_chars, utd_use_year, utd_use_month, utd_use_day, utd_datetime_start, utd_datetime_end)
+    """
+    # 1. 데이터 유효성 검사
+    if not data or not DB_POOL:
+        return None
+    
+    # 데이터 개수가 맞는지 확인 (테이블에 넣을 컬럼은 6개)
+    if len(data) < 11:
+        logging.error("입력된 데이터의 개수가 부족합니다.")
+        return False
+
+    # 2. 테이블 이름 오타 수정 (totla -> total) 및 SQL 쿼리 수정
+    # VALUES 뒤에는 컬럼명이 아니라 파라미터 홀더(%s)를 사용해야 합니다.
+    sql = """
+        INSERT INTO tbl_use_total_datas (
+            utd_user, 
+            utd_id, 
+            utd_sent_data_second, 
+            utd_sent_datas, 
+            utd_received, 
+            utd_transcript_chars, 
+            utd_use_year, 
+            utd_use_month, 
+            utd_use_day, 
+            utd_datetime_start, 
+            utd_datetime_end
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+    """
+    
+    # 3. 데이터 타입 안전 변환 (String -> Float/Int)
+    # 입력 데이터가 문자열로 들어오더라도 강제로 숫자로 바꿔서 에러를 방지합니다.
+    try:
+        safe_data = (
+            data[0],                # utd_user (String)
+            data[1],                # utd_id (String)
+            float(data[2]),         # utd_sent_data_second (Float로 변환)
+            float(data[3]),         # utd_sent_datas (Float로 변환)
+            float(data[4]),         # utd_received (Float로 변환)
+            int(data[5]),           # utd_transcript_chars (Int로 변환)
+            data[6],                # utd_use_year (String)
+            data[7],                # utd_use_month (String)
+            data[8],                # utd_use_day (String)
+            data[9],                # utd_datetime_start (String)
+            data[10]                # utd_datetime_end (String)
+        )
+    except ValueError as ve:
+        logging.error(f"데이터 타입 변환 실패 (숫자가 아닌 값이 포함됨): {ve}")
+        return False
+
+    conn = None
+
+    user_info = f"{safe_data[1]}/{safe_data[0]}" if len(data) >= 2 else "Unknown"
+
+    try:
+        async with DB_POOL.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
+                # 4. 쿼리 실행 (safe_data 사용)
+                await cursor.execute(sql, safe_data)
+                
+                # 5. 비동기 커밋 (await 필수)
+                await conn.commit()
+        
+        logging.info(f"[{user_info}] 사용자의 사용 데이타를 정상적으로 추가했습니다.")
+        return True
+
+    except Exception as e:
+        # logging.error시 f-string 안에서 data 인덱스 접근하다가 에러날 수 있으므로 안전하게 처리
+        logging.error(f"[{user_info}] 사용자의 사용 데이타 입력 중 오류 발생 : {e}")
+        return False
