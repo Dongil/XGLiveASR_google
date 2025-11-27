@@ -56,6 +56,9 @@ async def ws_handler(request: web.Request):
             logging.error(f"[{user_id}/{user_group}] [Auth] 생성 실패: {e}")
             google_creds_path = None
 
+    # ws 객체에 역할 속성 초기화 (아직 모름)
+    ws.role = 'unknown'
+
     if user_id not in CLIENTS:
         CLIENTS[user_id] = set()
     CLIENTS[user_id].add(ws)
@@ -130,6 +133,23 @@ async def ws_handler(request: web.Request):
         trans_log_str = ", ".join([f"'{k}': '{str(v)[:20]}...'" for k, v in translations.items()])
         logging.info(f"[{log_id}] [Broadcast] STT & Trans 완료 ({len(trans_tasks)} clients)")
 
+    # [수정] 세션 상태 브로드캐스트 (자동 판단)
+    async def broadcast_session_status():
+        clients = CLIENTS.get(user_id, set())
+        
+        # 현재 접속자 중 'professor' 역할이 있는지 확인
+        professor_connected = any(getattr(c, 'role', 'unknown') == 'professor' and not c.closed for c in clients)
+        
+        status_payload = json.dumps({
+            "type": "session_status",
+            "total_clients": len(clients),
+            "is_active": professor_connected # 교수가 있으면 True
+        }, ensure_ascii=False)
+        
+        for client in clients:
+            if not client.closed:
+                asyncio.create_task(client.send_str(status_payload))
+
     await send_json({"type": "info", "text": "connected."})
     
     google_task = asyncio.create_task(google_stream_manager(
@@ -150,7 +170,12 @@ async def ws_handler(request: web.Request):
                 
                 if msg_type == "get_config": 
                     # 처음 접속시 현재 로드된 설정을 전송합니다.
+                    # [교수로 식별]
+                    ws.role = 'professor'
+
                     await send_json({"type": "config", "data": client_config})
+                    # 교수 접속 사실 전파
+                    await broadcast_session_status()
 
                 elif msg_type == "save_config":
                     # 교수 페이지의 엔진맵, 주 번역언어를 환경 설정에 저장한다.
@@ -163,16 +188,16 @@ async def ws_handler(request: web.Request):
                     else:
                         await send_json({"type": "error", "text": "save failed."})
 
-                    # 동일 user_id의 다른 모든 클라이언트(학생 등)에게 설정 변경 전파
-                    update_payload = json.dumps({ "type": "config", "data": config_to_save }, ensure_ascii=False)
+                    # # 동일 user_id의 다른 모든 클라이언트(학생 등)에게 설정 변경 전파
+                    # update_payload = json.dumps({ "type": "config", "data": config_to_save }, ensure_ascii=False)
                     
-                    for client in CLIENTS.get(user_id, []):
-                        if client is not ws: # 나 자신에게는 보내지 않음 (이미 ack 받음)
-                            asyncio.create_task(client.send_str(update_payload))
+                    # for client in CLIENTS.get(user_id, []):
+                    #     if client is not ws: # 나 자신에게는 보내지 않음 (이미 ack 받음)
+                    #         asyncio.create_task(client.send_str(update_payload))
 
                 elif msg_type == "change_translate_langs":
                     # 교수 페이지에서 학생 요청 언어를 추가하여 전체 번역언어 변경 정보 전송됨
-                    received_data =  data.get("options", {})
+                    received_data =  data.get("data", {})
 
                     update_data = {
                         "translation": {
@@ -191,9 +216,12 @@ async def ws_handler(request: web.Request):
                             asyncio.create_task(client.send_str(update_payload))
                 
                 elif msg_type == "join_new_viewer":
-                    # 학생 페이지에서 클라이언트가 처음 접속 할 경우
+                    # 학생 페이지에서 클라이언트가 처음 접속 할 경우                    
                     # 처음 접속시 현재 아이디의 저장된 설정을 전송합니다.
                     await send_json({"type": "config", "data": client_config})
+                    
+                    # 학생 접속 사실 전파 및 현재 교수 접속 여부 확인
+                    await broadcast_session_status()
 
                     # 그후 교수페이지의 번역언어 변동 상황을 받을 수 있도록 요청한다.
                     status_payload = json.dumps({ "type": msg_type }, ensure_ascii=False)
@@ -229,6 +257,9 @@ async def ws_handler(request: web.Request):
         if google_creds_path:
             try: os.remove(google_creds_path)
             except OSError: pass
+
+        # 연결 해제 시에도 상태 업데이트 전송
+        await broadcast_session_status()
 
         if not ws.closed: await ws.close()
     return ws

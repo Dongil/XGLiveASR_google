@@ -128,13 +128,15 @@ async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcas
         except asyncio.CancelledError:
             break
         except Exception as e:
-            # --- [수정 시작] Audio Timeout Error는 INFO 레벨로, 그 외의 에러만 ERROR로 처리 ---
+            # --- [수정] 에러 메시지 필터링 로직 개선 ---
             error_str = str(e)
             if "Audio Timeout" in error_str:
                 logging.info(f"[{log_id}] [STT] 오디오 입력이 없어 스트림이 타임아웃되었습니다. (정상 동작)")
+            elif "Exceeded maximum allowed stream duration" in error_str:
+                logging.info(f"[{log_id}] [STT] 스트림 최대 시간(5분)이 경과하여 재연결합니다. (정상 동작)")
             else:
                 logging.error(f"[{log_id}] [STT] 스트림 매니저 오류 발생: {e}")
-            # --- [수정 종료] ---
+            # -----------------------------------------
         
         if ws.closed:
             break
