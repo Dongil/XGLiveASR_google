@@ -12,18 +12,21 @@ from google.oauth2 import service_account
 
 class Translator(ABC):
     @abstractmethod
-    async def translate(self, text: str, target_lang: str) -> str: pass
+    async def translate(self, text: str, target_lang: str, source_lang: str = None ) -> str: pass
 
 class DeepLTranslator(Translator):
     def __init__(self, api_key: str):
         if not api_key or api_key == "YOUR_DEEPL_API_KEY": raise ValueError("DeepL API 키가 설정되지 않았습니다.")
         self.translator = deepl.Translator(api_key)
-        self.lang_map = {"en": "EN-US", "ja": "JA", "zh": "ZH", "vi": "VI", "id": "ID", "tr": "TR", "de": "DE", "it": "IT", "fr": "FR", "es" : "ES", "ru": "RU", "pt": "PT"}
+        self.lang_map = {"en": "EN-US", "ja": "JA", "zh": "ZH", "vi": "VI", "id": "ID", "tr": "TR", "de": "DE", "it": "IT", "fr": "FR", "es" : "ES", "ru": "RU", "pt": "PT", "ko": "KO"}
     
-    async def translate(self, text: str, target_lang: str) -> str:
+    async def translate(self, text: str, target_lang: str, source_lang: str = None ) -> str:
         if not text or target_lang not in self.lang_map: return ""
+
+        # DeepL source_lang 매핑 (필요시)
+        deepl_source = self.lang_map.get(source_lang) if source_lang else None
         try:
-            result = await asyncio.to_thread(self.translator.translate_text, text, source_lang="KO", target_lang=self.lang_map[target_lang])
+            result = await asyncio.to_thread(self.translator.translate_text, text, source_lang=deepl_source, target_lang=self.lang_map[target_lang])
             return result.text
         except Exception as e:
             logging.error(f"[Translate] DeepL 번역 오류 ({target_lang}): {e}"); return f"[{target_lang} 번역 실패]"
@@ -34,11 +37,13 @@ class PapagoTranslator(Translator):
             raise ValueError("Papago Client ID 또는 Secret이 설정되지 않았습니다.")
         self.url = "https://papago.apigw.ntruss.com/nmt/v1/translation"
         self.headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-NCP-APIGW-API-KEY-ID": client_id, "X-NCP-APIGW-API-KEY": client_secret}
-        self.lang_map = {"en": "en", "ja": "ja", "zh": "zh-CN", "vi": "vi", "id": "id", "th": "th", "de": "de", "it": "it", "fr": "fr", "es" : "es", "ru": "ru"}
+        self.lang_map = {"en": "en", "ja": "ja", "zh": "zh-CN", "vi": "vi", "id": "id", "th": "th", "de": "de", "it": "it", "fr": "fr", "es" : "es", "ru": "ru", "ko": "KO"}
     
-    async def translate(self, text: str, target_lang: str) -> str:
+    async def translate(self, text: str, target_lang: str,source_lang: str = None ) -> str:
         if not text or target_lang not in self.lang_map: return ""
-        data = {"source": "ko", "target": self.lang_map[target_lang], "text": text}
+
+        src_lang_code = self.lang_map.get(source_lang, "ko") # 기본값 ko
+        data = {"source": src_lang_code, "target": self.lang_map[target_lang], "text": text}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.url, headers=self.headers, data=data) as response:
@@ -58,13 +63,14 @@ class GoogleTranslator(Translator):
             # credentials 인자를 사용하여 클라이언트 생성
             self.client = translate.Client(credentials=credentials)            
         except Exception as e: raise ValueError(f"Google Translate 클라이언트 초기화 실패: {e}.")
-        self.lang_map = {"en": "en", "ja": "ja", "zh": "zh-CN", "vi": "vi", "id": "id", "th": "th", "mn": "mn", "uz": "uz", "tr": "tr", "de": "de", "it": "it", "fr": "fr", "es": "es", "ru": "ru", "pt": "pt"}
+        self.lang_map = {"en": "en", "ja": "ja", "zh": "zh-CN", "vi": "vi", "id": "id", "th": "th", "mn": "mn", "uz": "uz", "tr": "tr", "de": "de", "it": "it", "fr": "fr", "es": "es", "ru": "ru", "pt": "pt", "ko": "KO"}
     
-    async def translate(self, text: str, target_lang: str) -> str:
-        if not text or target_lang not in self.lang_map: return ""
+    async def translate(self, text: str, target_lang: str, source_lang: str = None ) -> str:
+        if not text or target_lang not in self.lang_map: return ""        
         try:
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, lambda: self.client.translate(text, target_language=self.lang_map[target_lang], source_language='ko'))
+            # [수정] source_language 인자 사용 (None이면 Google이 자동 감지)
+            result = await loop.run_in_executor(None, lambda: self.client.translate(text, target_language=self.lang_map[target_lang], source_language=source_lang))
             return html.unescape(result['translatedText'])
         except Exception as e: 
             logging.error(f"[Translate] Google 번역 오류 ({target_lang}): {e}"); return f"[{target_lang} Google 번역 실패]"
