@@ -282,6 +282,68 @@
     .chat-bubble.me .chat-translation {
         border-top-color: rgba(255,255,255,0.3);
     }
+    /* [신규] 발언자 관리 스타일 */
+    .speaker-management {
+        border-top: 1px solid var(--border-color);
+        background-color: var(--card-bg-color);
+        padding: 0.5rem;
+        font-size: 0.9em;
+    }
+    .speaker-header {
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+        color: var(--text-color-strong);
+        padding-left: 0.5rem;
+    }
+    .speaker-list-wrapper {
+        max-height: 150px;
+        overflow-y: auto;
+    }
+    #speakerTable {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9em;
+    }
+    #speakerTable th {
+        text-align: left;
+        padding: 0.4rem 0.6rem;
+        color: var(--interim-text-color);
+        border-bottom: 1px solid var(--border-color);
+        font-weight: 500;
+    }
+    #speakerTable td {
+        padding: 0.4rem 0.6rem;
+        border-bottom: 1px solid var(--border-color);
+        vertical-align: middle;
+    }
+    #speakerTable tr:last-child td {
+        border-bottom: none;
+    }
+    
+    /* 상태 뱃지 */
+    .badge {
+        display: inline-block;
+        padding: 0.2rem 0.5rem;
+        border-radius: 10px;
+        font-size: 0.85em;
+        color: white;
+    }
+    .badge.active { background-color: #28a745; } /* 발언중 (초록) */
+    .badge.pending { background-color: #ffc107; color: #333; } /* 대기중 (노랑) */
+    
+    /* 제어 버튼 */
+    .control-btn {
+        padding: 0.3rem 0.7rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.9em;
+        color: white;
+        transition: opacity 0.2s;
+    }
+    .control-btn:hover { opacity: 0.9; }
+    .control-btn.accept { background-color: var(--primary-color); } /* 수락 (파랑) */
+    .control-btn.stop { background-color: #dc3545; } /* 종료 (빨강) */
   </style>
 </head>
 <body>
@@ -348,6 +410,40 @@
                     <!-- 교수는 한국어 고정, 닉네임 '교수님' 고정 -->
                     <input type="text" id="chatInput" placeholder="답변을 입력하세요..." disabled>
                     <button id="chatSendBtn" disabled>전송</button>
+                </div>
+
+                <!-- [신규] 발언자 관리 섹션 -->
+                <div id="speaker-management-area" class="speaker-management">
+                    <div class="speaker-header">
+                        <span>발언자 관리</span>
+                    </div>
+                    <div class="speaker-list-wrapper">
+                        <table id="speakerTable">
+                            <thead>
+                                <tr>
+                                    <th>닉네임</th>
+                                    <th>상태</th>
+                                    <th>제어</th>
+                                </tr>
+                            </thead>
+                            <tbody id="speakerListBody">
+                                <!-- JS로 동적 추가됨 -->
+                                <!-- 예시 데이터 (나중에 삭제) -->
+                                <!--
+                                <tr>
+                                    <td>학생1</td>
+                                    <td><span class="badge active">발언중</span></td>
+                                    <td><button class="control-btn stop">종료</button></td>
+                                </tr>
+                                <tr>
+                                    <td>학생2</td>
+                                    <td><span class="badge pending">대기중</span></td>
+                                    <td><button class="control-btn accept">수락</button></td>
+                                </tr>
+                                -->
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </section>
@@ -479,6 +575,9 @@
         const chatInput = document.getElementById('chatInput');
         const chatSendBtn = document.getElementById('chatSendBtn');
         const chatMessages = document.getElementById('chat-messages');
+
+        // [신규] 발언자 목록 관리
+        const speakerListBody = document.getElementById('speakerListBody');
 
         // --- 3. Global State ---
         let ws, ac, src, stream, worklet, rafId;
@@ -712,6 +811,57 @@
             if (chatSendBtn) chatSendBtn.disabled = false;
         }
 
+        // 1. 요청 추가 (학생이 요청했을 때 호출)
+        function addSpeakerRequest(nickname, clientId) {
+            // 중복 확인
+            if (document.getElementById(`req-${clientId}`)) return;
+
+            const tr = document.createElement('tr');
+            tr.id = `req-${clientId}`;
+            tr.innerHTML = `
+                <td>${nickname}</td>
+                <td><span class="badge pending">대기중</span></td>
+                <td><button class="control-btn accept" onclick="acceptSpeaker('${clientId}')">수락</button></td>
+            `;
+            speakerListBody.appendChild(tr);
+        }
+
+        // 2. 수락 처리 (교수가 수락 버튼 클릭)
+        window.acceptSpeaker = function(clientId) {
+            const tr = document.getElementById(`req-${clientId}`);
+            if (!tr) return;
+
+            // 다른 발언자가 있다면 먼저 종료해야 함 (1명만 허용 정책 시)
+            // ... (로직 추가 가능)
+
+            // 상태 변경 UI
+            tr.querySelector('.badge').className = 'badge active';
+            tr.querySelector('.badge').textContent = '발언중';
+            
+            const btn = tr.querySelector('button');
+            btn.className = 'control-btn stop';
+            btn.textContent = '종료';
+            btn.onclick = () => stopSpeaker(clientId);
+
+            // 서버에 수락 메시지 전송
+            ws.send(JSON.stringify({
+                type: "voice_permission_grant",
+                target_client_id: clientId
+            }));
+        };
+
+        // 3. 종료 처리 (교수가 종료 버튼 클릭)
+        window.stopSpeaker = function(clientId) {
+            const tr = document.getElementById(`req-${clientId}`);
+            if (tr) tr.remove(); // 목록에서 제거
+
+            // 서버에 종료 메시지 전송
+            ws.send(JSON.stringify({
+                type: "voice_permission_revoke",
+                target_client_id: clientId
+            }));
+        };
+
         // --- 5. Core Logic Functions ---
         function connectWebSocket() {
             logSystemMessage("서버에 연결 중...");
@@ -823,6 +973,24 @@
                         const systemMsg = `현재 총 ${msg.total_chat_users}명이 참여중`;
                         appendSystemMessage(systemMsg);
                     }
+                    else if (msg.type === 'voice_req_noti') {
+                        addSpeakerRequest(msg.nickname, msg.client_id);
+                    }                    
+                    else if (msg.type === 'voice_req_cancel_noti') {
+                        // [신규] 학생의 발언 취소/종료 알림 처리
+                        // 해당 학생의 요청 행(tr)을 찾아서 제거하거나 상태 변경
+                        const tr = document.getElementById(`req-${msg.client_id}`);
+                        if (tr) {
+                            //tr.remove(); // 목록에서 제거 (또는 '종료됨' 상태로 변경 후 잠시 뒤 제거)
+                            
+                            // 만약 '종료됨' 상태로 보여주고 싶다면:
+                            const badge = tr.querySelector('.badge');
+                            badge.className = 'badge'; 
+                            badge.textContent = '종료됨';
+                            badge.style.backgroundColor = '#6c757d'; // 회색
+                            setTimeout(() => tr.remove(), 3000); // 3초 뒤 제거
+                        }
+                    }
                 } catch(err) { console.error("Error parsing msg:", err); }
             };
         }
@@ -913,7 +1081,7 @@
             logSystemMessage("음성 스트림이 중지되었습니다.");
         }
         
-        // 채팅 메시지 표시 함수
+        // [수정] 채팅 메시지 표시 함수 (음성 아이콘 추가 및 번역 표시 강화)
         function appendChatMessage(data) {
             const isMe = data.sender.role === 'professor'; // 교수가 보낸 것인가?
             const chatBox = document.getElementById('chat-messages');
@@ -921,11 +1089,15 @@
             const bubble = document.createElement('div');
             bubble.className = `chat-bubble ${isMe ? 'me' : 'other'}`;
             
-            // 닉네임 표시 (상대방일 때만)
+            // [추가] 음성/텍스트 아이콘 구분
+            const typeIcon = data.is_voice ? '🎤 ' : '💬 ';
+            
+            // 닉네임 및 아이콘 표시 (상대방일 때만)
             if (!isMe) {
                 const nameSpan = document.createElement('span');
                 nameSpan.className = 'sender-name';
-                nameSpan.textContent = data.sender.nickname;
+                nameSpan.textContent = typeIcon + data.sender.nickname;
+                
                 bubble.appendChild(nameSpan);
             }
             
@@ -934,17 +1106,19 @@
             let subText = "";
             
             if (isMe) {
-                // 내가 보낸 메시지: 원문만 표시 (또는 번역 확인용으로 추가 표시 가능)
-                mainText = data.original_text;
+                // 내가 보낸 메시지: 원문만 표시
+                mainText = typeIcon + data.original_text;
             } else {
                 // 학생이 보낸 메시지:
-                // 1. 한국어 번역이 있으면 메인으로 표시
-                // 2. 원문은 서브로 표시
+                // 교수는 항상 한국어(ko) 번역을 메인으로 봅니다.
                 if (data.translations && data.translations.ko) {
                     mainText = data.translations.ko;
-                    subText = data.original_text; // 원문 (학생 언어)
+                    // 원문과 번역문이 다를 때만 서브로 원문 표시
+                    if (data.original_text !== data.translations.ko) {
+                        subText = data.original_text;
+                    }
                 } else {
-                    // 번역 실패했거나 한국어 원문인 경우
+                    // 번역이 없거나 실패했으면 원문 표시
                     mainText = data.original_text;
                 }
             }
@@ -959,7 +1133,7 @@
             }
             
             chatBox.appendChild(bubble);
-            chatBox.scrollTop = chatBox.scrollHeight; // 스크롤 하단으로
+            chatBox.scrollTop = chatBox.scrollHeight; 
         }
 
         // [신규] 시스템 메시지 추가 함수 
@@ -980,7 +1154,7 @@
             ws.send(JSON.stringify({
                 type: "chat_message",
                 nickname: "교수님",
-                my_lang: "ko",
+                lang: "ko",
                 target_langs : targetLangs,
                 text: text
             }));

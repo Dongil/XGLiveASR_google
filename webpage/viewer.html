@@ -282,6 +282,56 @@
     .chat-bubble.me .chat-translation {
         border-top-color: rgba(255,255,255,0.3);
     }
+    /* 입력 영역 스타일 확장 */
+    .chat-input-area-wrapper {
+        background-color: var(--card-bg-color);
+        border-top: 1px solid var(--border-color);
+        padding: 0.5rem;
+    }
+    .input-mode-tabs {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+    .mode-btn {
+        padding: 0.3rem 0.8rem;
+        border: 1px solid var(--border-color);
+        background-color: var(--control-bg-color);
+        border-radius: 15px;
+        font-size: 0.85em;
+        cursor: pointer;
+        color: var(--text-color);
+    }
+    .mode-btn.active {
+        background-color: var(--primary-color);
+        color: white;
+        border-color: var(--primary-color);
+    }
+    .input-layer {
+        width: 100%;
+        gap: 0.5rem;
+    }
+    .input-layer input[type="text"] {
+        flex-grow: 1;
+        padding: 0.6rem;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        background-color: var(--bg-color);
+        color: var(--text-color);
+    }
+    .input-layer button {
+        padding: 0.6rem 1.2rem;
+        border: none;
+        border-radius: 4px;
+        background-color: var(--primary-color);
+        color: white;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+    .voice-control-btn:disabled {
+        background-color: #ccc !important;
+        cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -342,9 +392,37 @@
         
         <div id="student-chat-container" class="qna-container" style="display: none; height: 300px;"> <!-- 시작 전엔 숨김 -->
             <div id="student-chat-messages" class="chat-messages"></div>
-            <div class="chat-input-area">
-                <input type="text" id="studentChatInput" placeholder="질문을 입력하세요...">
-                <button id="studentChatSendBtn">전송</button>
+            <div class="chat-input-area-wrapper">
+                <!-- 입력 모드 전환 탭 -->
+                <div class="input-mode-tabs">
+                    <button id="modeTextBtn" class="mode-btn active">Text</button>
+                    <button id="modeVoiceBtn" class="mode-btn">음성</button>
+                </div>
+
+                <!-- 텍스트 입력 모드 UI -->
+                <div id="textInputLayer" class="input-layer" style="display: flex;">
+                    <input type="text" id="studentChatInput" placeholder="질문을 입력하세요...">
+                    <button id="studentChatSendBtn">전송</button>
+                </div>
+
+                <!-- 음성 입력 모드 UI -->
+                <div id="voiceInputLayer" class="input-layer" style="display: none; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                    <label style="font-size: 0.9em;">장치 선택: 
+                        <select id="studentDeviceSelect" style="padding: 0.3rem; border-radius: 4px; max-width: 200px;"></select>
+                    </label>
+                    
+                    <button id="requestVoiceBtn" class="voice-control-btn" style="background-color: var(--primary-color);">요청</button>
+                    <button id="stopVoiceBtn" class="voice-control-btn" style="background-color: #dc3545; display: none;">발언종료</button>
+                    
+                    <!-- 마이크 상태 아이콘 및 텍스트 (실시간 인식 내용 표시용) -->
+                    <div class="voice-status" style="display: flex; align-items: center; gap: 0.5rem; flex-grow: 1;">
+                        <span id="micIcon" style="font-size: 1.2em; color: #ccc;">🎤</span>
+                        <div class="meter-mini" style="width: 50px; height: 8px; background: #ddd; border-radius: 4px; overflow: hidden;">
+                            <div id="studentMicBar" style="width: 0%; height: 100%; background: #28a745; transition: width 0.1s;"></div>
+                        </div>
+                        <span id="voiceInterimText" style="font-size: 0.9em; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 400px;"></span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -405,6 +483,7 @@
         const vStatusDot = document.querySelector('#viewerStatus .status-dot');
 
         let ws;
+        let myCilinetID;    // 나의 클라이언트 아이디
         let currentFontSize = parseFloat(getComputedStyle(root).getPropertyValue('--viewer-font-size'));
         let currentTargetLangs = []; 
         
@@ -427,6 +506,21 @@
         const studentChatInput = document.getElementById('studentChatInput');
         const studentChatSendBtn = document.getElementById('studentChatSendBtn');
         
+        // --- [신규] 음성 질문 UI 제어 ---
+        const modeTextBtn = document.getElementById('modeTextBtn');
+        const modeVoiceBtn = document.getElementById('modeVoiceBtn');
+        const textInputLayer = document.getElementById('textInputLayer');
+        const voiceInputLayer = document.getElementById('voiceInputLayer');
+        const studentDeviceSelect = document.getElementById('studentDeviceSelect');
+        const requestVoiceBtn = document.getElementById('requestVoiceBtn');
+        const stopVoiceBtn = document.getElementById('stopVoiceBtn');
+        const micIcon = document.getElementById('micIcon');
+        const studentMicBar = document.getElementById('studentMicBar');
+        const voiceInterimText = document.getElementById('voiceInterimText');
+
+        // [추가] 오디오 처리를 위한 Worklet 코드 정의
+        const workletCode = `class DownTo16k extends AudioWorkletProcessor{process(e){let l=e[0]?.[0];if(l){let t=new Int16Array(Math.floor(l.length/3));for(let s=0,a=0;s<t.length;s++,a+=3)t[s]=32767*Math.max(-1,Math.min(1,l[a]));this.port.postMessage(t,[t.buffer])}return!0}}registerProcessor("down-to-16k",DownTo16k);`;
+
         // --- 2. Function Definitions ---
 
         // [신규] 메시지 렌더링 공통 함수
@@ -648,43 +742,48 @@
             ws.send(JSON.stringify({ type: "request_language_add", request_lang }));
         }
 
-        // 채팅 메시지 표시 함수
+        // [수정] 채팅 메시지 표시 함수 (아이콘 추가 및 스타일 개선)
         function appendStudentChatMessage(data) {
-            // 내가 보낸 메시지인지 확인 (닉네임 등으로 비교하거나, 로컬 변수 활용)
-            // 여기서는 간단히 닉네임으로 비교 (중복 가능성 있음, 추후 개선 필요)
+            // 내가 보낸 메시지인지 확인
             const isMe = data.sender.nickname === document.getElementById('nicknameInput').value; 
-            
             const chatBox = document.getElementById('student-chat-messages');
+            
             const bubble = document.createElement('div');
             bubble.className = `chat-bubble ${isMe ? 'me' : 'other'}`;
             
+            // [추가] 음성/텍스트 아이콘 결정
+            const typeIcon = data.is_voice ? '🎤 ' : '💬 ';
+
+            // 1. 닉네임 표시 영역 (상대방일 때)
             if (!isMe) {
                 const nameSpan = document.createElement('span');
                 nameSpan.className = 'sender-name';
-                nameSpan.textContent = data.sender.nickname;
+                // 아이콘 + 닉네임
+                nameSpan.textContent = typeIcon + data.sender.nickname;
                 bubble.appendChild(nameSpan);
-            }
-            
+            } 
+           
+            // 텍스트 내용 구성
+            const myLang = document.getElementById('myLangSelect').value; // 내가 선택한 언어
+           
+            // 텍스트 내용 구성
             let mainText = "";
             let subText = "";
-            const myLang = document.getElementById('myLangSelect').value; // 내가 선택한 언어
             
             if (isMe) {
-                mainText = data.original_text;
+                // 내가 보낸 메시지: 원문만 표시
+                mainText = typeIcon + data.original_text;
             } else {
-                // 상대방(교수 또는 다른 학생) 메시지:
-                // 1. 내 언어로 번역된 내용이 있으면 메인
-                // 2. 원문은 서브
-                
+                // 1. 내 언어로 번역된 내용이 있으면 먼저 표시
                 if (data.translations && data.translations[myLang]) {
                     mainText = data.translations[myLang];
-                    
-                    // 원문이 내 언어가 아닐 때만 서브로 표시
-                    if (data.sender.lang !== myLang) {
+
+                    // 원문 언어와 나의 언어가  다를 때만 서브로 원문 표시
+                    if (data.sender.lang  !== myLang) {
                         subText = data.original_text;
                     }
                 } else {
-                    // 번역이 없으면 원문 표시
+                    // 번역이 없거나 실패했으면 원문 표시
                     mainText = data.original_text;
                 }
             }
@@ -699,7 +798,7 @@
             }
             
             chatBox.appendChild(bubble);
-            chatBox.scrollTop = chatBox.scrollHeight;
+            chatBox.scrollTop = chatBox.scrollHeight; 
         }
 
         function sendStudentChatMessage() {
@@ -743,6 +842,10 @@
                     if (msg.type === "stt_interim") sttInterimHandler(msg);
                     else if (msg.type === "stt_final") sttFinalHandler(msg);
                     else if (msg.type === "translation_update") translationHandler(msg);
+                    else if (msg.type === "your_id") {
+                        myCilinetID = msg.data;
+                        console.log(msg.data);
+                    }
                     else if (msg.type === "config") {
                         const config = msg.data;
                         let targetLangs = [];
@@ -769,7 +872,27 @@
                             vStatusDot.className = 'status-dot status-connecting';
                     }
                     else if (msg.type === 'chat_broadcast') {
+                        console.log(msg);
+                        console.log(myCilinetID);
+                        // 최종 결과가 방송되면 중간 텍스트 지우기 (선택 사항)
+                        if (msg.sender.client_id === myCilinetID) { // 내 메시지인 경우
+                             const interimSpan = document.getElementById('voiceInterimText');
+                             if (interimSpan) interimSpan.textContent = "";
+                        }
                         appendStudentChatMessage(msg);
+                    }
+                    else if (msg.type === 'voice_permitted') {
+                        // 마이크 켜기, UI 변경 (발언 중)
+                        startStudentVoiceStream(); 
+                    } else if (msg.type === 'voice_revoked') {
+                        // 마이크 끄기, UI 초기화
+                        stopStudentVoiceStream();
+                    } else if (msg.type === 'voice_interim') {
+                        // [신규] 본인 음성 인식 중간 결과 표시
+                        const interimSpan = document.getElementById('voiceInterimText');
+                        if (interimSpan) {
+                            interimSpan.textContent = msg.text;
+                        }
                     }
                 } catch (err) {
                     console.error("Error parsing server message:", err);
@@ -777,10 +900,136 @@
             };
         }
         
+        // 학생용 마이크 장치 목록 로드
+        async function listStudentDevices() {
+            try {
+                await navigator.mediaDevices.getUserMedia({ audio: true }); // 권한 요청
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                studentDeviceSelect.innerHTML = "";
+                devices.filter(d => d.kind === "audioinput").forEach(d => {
+                    const opt = document.createElement("option");
+                    opt.value = d.deviceId;
+                    opt.textContent = d.label || `마이크 (${d.deviceId.slice(0, 6)})`;
+                    studentDeviceSelect.appendChild(opt);
+                });
+            } catch (e) { console.warn("마이크 장치를 찾을 수 없습니다:", e); }
+        }
+
+        // [추가] 학생용 rafId 변수 선언 (전역 변수 부분에 추가하거나 여기서 선언)
+        let studentRafId; 
+
+        async function startStudentVoiceStream() {
+            if (isStudentSpeaking) return;
+            
+            const deviceId = studentDeviceSelect.value;
+            if (!deviceId) return;
+
+            // [중요] 시작하자마자 플래그를 true로 설정
+            isStudentSpeaking = true;
+
+            try {
+                studentStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId }, sampleRate: 48000, channelCount: 1, echoCancellation: true } });
+                
+                studentAc = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+                await studentAc.audioWorklet.addModule(URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' })));
+                
+                const src = studentAc.createMediaStreamSource(studentStream);
+                studentWorklet = new AudioWorkletNode(studentAc, 'down-to-16k');
+                
+                studentWorklet.port.onmessage = (e) => {
+                    // ws 상태와 플래그 확인
+                    if (!ws || ws.readyState !== 1 || !isStudentSpeaking) return;
+                    
+                    const pcm = new Int16Array(e.data);
+                    const header = new ArrayBuffer(4); 
+                    new DataView(header).setUint32(0, studentSeq.value++);
+                    const payload = new Uint8Array(header.byteLength + pcm.byteLength);
+                    payload.set(new Uint8Array(header), 0);
+                    payload.set(new Uint8Array(pcm.buffer), header.byteLength);
+                    ws.send(payload);
+                };
+                src.connect(studentWorklet);
+                
+                // 피크 미터 로직
+                const analyser = studentAc.createAnalyser();
+                analyser.fftSize = 1024;
+                src.connect(analyser);
+                const buf = new Float32Array(analyser.fftSize);
+                
+                // 이전 루프 정리
+                if (studentRafId) {
+                    cancelAnimationFrame(studentRafId);
+                    studentRafId = null;
+                }
+
+                const loop = () => {
+                    if (!isStudentSpeaking) return;
+                    
+                    analyser.getFloatTimeDomainData(buf);
+                    const rms = Math.sqrt(buf.reduce((s, v) => s + v * v, 0) / buf.length);
+                    const width = Math.min(100, Math.max(0, (20 * Math.log10(rms) + 60) * (100 / 60)));
+                    
+                    const bar = document.getElementById('studentMicBar');
+                    if(bar) bar.style.width = width + "%";
+                    
+                    studentRafId = requestAnimationFrame(loop);
+                };
+                loop();
+                
+                // UI 변경
+                requestVoiceBtn.style.display = 'none';
+                stopVoiceBtn.style.display = 'inline-block';
+                
+            } catch (e) {
+                console.error("학생 마이크 시작 실패:", e);
+                alert("마이크를 시작할 수 없습니다: " + e.message);
+                isStudentSpeaking = false; // 실패 시 플래그 원복
+                stopStudentVoiceStream(); 
+                ws.send(JSON.stringify({ type: "voice_req_cancel" }));
+            }
+        }
+
+        async function stopStudentVoiceStream() {
+            isStudentSpeaking = false;
+            studentSeq.value = 0;
+
+            if (studentRafId) {
+                cancelAnimationFrame(studentRafId);
+                studentRafId = null;
+            }
+
+            if (studentAc) {
+                await studentAc.close();
+                studentAc = null;
+            }
+
+            if (studentStream) {
+                studentStream.getTracks().forEach(t => t.stop());
+                studentStream = null;
+            }
+            
+            // UI 원복
+            requestVoiceBtn.style.display = 'inline-block';
+            requestVoiceBtn.disabled = false;
+            requestVoiceBtn.textContent = "요청";
+            requestVoiceBtn.style.backgroundColor = "";
+            
+            stopVoiceBtn.style.display = 'none';
+            studentDeviceSelect.disabled = false;
+            if(document.getElementById('studentMicBar')) 
+                document.getElementById('studentMicBar').style.width = "0%";
+        }
+
         // --- 3. Main Initialization ---
         
         const baseUrl = wsUrlEl.value;
         let finalWsUrl = baseUrl;
+        
+        // [신규] 학생 음성 스트림용 변수
+        let studentStream, studentAc, studentWorklet;
+        let isStudentSpeaking = false;
+        const studentSeq = { value: 0 }; // 패킷 순서 관리를 위한 객체
+
         try {
             const params = new URLSearchParams(window.location.search);
             const wsParams = new URLSearchParams();
@@ -874,6 +1123,63 @@
             ws.send(JSON.stringify({ type: "chat_join", data }));
         };
         
+        // 모드 전환
+        modeTextBtn.onclick = () => {
+            modeTextBtn.classList.add('active');
+            modeVoiceBtn.classList.remove('active');
+            textInputLayer.style.display = 'flex';
+            voiceInputLayer.style.display = 'none';
+        };
+        modeVoiceBtn.onclick = () => {
+            modeVoiceBtn.classList.add('active');
+            modeTextBtn.classList.remove('active');
+            textInputLayer.style.display = 'none';
+            voiceInputLayer.style.display = 'flex';
+            // 처음 탭을 열 때 장치 목록 로드
+            if (studentDeviceSelect.options.length === 0) {
+                listStudentDevices();
+            }
+        };
+
+        // 음성 질문 요청 로직 연결
+        requestVoiceBtn.onclick =  async () => {
+            const nick = nicknameInput.value.trim();
+            if (!nick) {
+                alert("닉네임을 먼저 입력해주세요.");
+                return;
+            }
+            
+            const deviceId = studentDeviceSelect.value;
+            if (!deviceId) {
+                alert("사용할 마이크 장치를 선택해주세요.");
+                return;
+            }
+
+            // 마이크 유효성 검증 (잠깐 스트림 열어보고 닫기)
+            try {
+                const testStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+                testStream.getTracks().forEach(t => t.stop()); // 확인 후 즉시 종료
+            } catch (e) {
+                alert("선택한 마이크를 사용할 수 없습니다. 권한을 확인하거나 다른 장치를 선택해주세요.");
+                console.error(e);
+                return;
+            }
+
+            // 서버에 요청 전송
+            ws.send(JSON.stringify({ type: "voice_req", nickname: nick }));
+            
+            // UI 상태 변경: 요청 중
+            requestVoiceBtn.disabled = true;
+            requestVoiceBtn.textContent = "요청 중...";
+            requestVoiceBtn.style.backgroundColor = "#ffc107"; // 노란색 (대기 상태)
+            studentDeviceSelect.disabled = true; // 장치 변경 막기
+        };
+
+        stopVoiceBtn.onclick = () => {
+            stopStudentVoiceStream();
+            ws.send(JSON.stringify({ type: "voice_req_cancel" })); // 서버에 종료 알림
+        };
+
         updateWindowsAndLayout();
         window.addEventListener('resize', updateWindowsAndLayout);
     });

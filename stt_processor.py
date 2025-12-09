@@ -9,6 +9,16 @@ from google.oauth2 import service_account
 import kss
 from config import SAMPLE_RATE
 
+# [신규] 언어 코드 매핑 헬퍼
+def map_lang_code_to_google(lang):
+    mapping = {
+        'en': 'en-US', 'ja': 'ja-JP', 'zh': 'zh-CN', 'ko': 'ko-KR',
+        'vi': 'vi-VN', 'id': 'id-ID', 'th': 'th-TH', 'mn': 'mn-MN',
+        'uz': 'uz-UZ', 'tr': 'tr-TR', 'de': 'de-DE', 'it': 'it-IT',
+        'fr': 'fr-FR', 'es': 'es-ES', 'ru': 'ru-RU', 'pt': 'pt-PT'
+    }
+    return mapping.get(lang, 'en-US')
+
 # --- [수정] google_creds_path 인자 추가 ---
 async def google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path: str | None):
     """Google STT 스트림을 처리하고 결과를 브로드캐스팅하는 코어 로직"""
@@ -118,6 +128,63 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
             final_sentence = utterance_unstable_buffer.strip()
             logging.info(f"[{log_id}] [STT] 스트림 종료 후 남은 버퍼 처리: \"{final_sentence}\"")
             await broadcast_func(final_sentence)
+
+# [신규] 학생 전용 STT 처리 함수
+async def student_stream_processor(student_ws, student_queue, chat_handler_func, user_info, google_creds_path):
+    credentials = None
+    if google_creds_path:
+        credentials = service_account.Credentials.from_service_account_file(google_creds_path)
+    
+    client = speech.SpeechAsyncClient(credentials=credentials)
+    
+    student_lang = user_info.get('lang', 'en')
+    stt_lang_code = map_lang_code_to_google(student_lang)
+
+    config = speech.RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+        sample_rate_hertz=16000,
+        language_code=stt_lang_code
+    )
+    streaming_config = speech.StreamingRecognitionConfig(config=config, interim_results=True)
+
+    async def request_generator():
+        yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
+        while True:
+            try:
+                chunk = await asyncio.wait_for(student_queue.get(), timeout=5.0)
+                if chunk is None: break
+                yield speech.StreamingRecognizeRequest(audio_content=chunk)
+            except asyncio.TimeoutError:
+                break 
+            except Exception:
+                break
+
+    try:
+        stream = await client.streaming_recognize(requests=request_generator())
+        
+        async for response in stream:
+            if not response.results: continue
+            result = response.results[0]
+            # alternatives가 없을 수 있으므로 체크
+            if not result.alternatives: continue
+            
+            transcript = result.alternatives[0].transcript
+            
+            chat_data = {
+                "nickname": user_info.get("nickname", "Student"),
+                "lang": student_lang,
+                "text": transcript,
+                "is_voice": True,
+                "is_final": result.is_final
+            }
+
+            await chat_handler_func(chat_data)
+            # logging.info(f"[Student STT] 인식됨: {transcript}")
+
+    except Exception as e:
+        logging.error(f"[Student STT] 오류: {e}")
+    finally:
+        logging.info(f"[Student STT] 스트림 종료")
 
 # --- [수정] google_creds_path 인자 추가 및 전달 ---
 async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path: str | None):

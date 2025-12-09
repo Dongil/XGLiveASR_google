@@ -13,7 +13,7 @@ from aiohttp import web
 
 import config
 from config_manager import load_user_config, save_user_config, deep_update
-from stt_processor import google_stream_manager
+from stt_processor import google_stream_manager, student_stream_processor
 from translators import DeepLTranslator, PapagoTranslator, GoogleTranslator
 from db_manager import get_api_keys
 
@@ -117,9 +117,16 @@ async def ws_handler(request: web.Request):
     # 채팅 메시지 처리
     async def handle_chat_message(data):
         sender_nick = data.get("nickname", "Anonymous")
-        sender_lang = data.get("my_lang", "en")
+        sender_lang = data.get("lang", "en")
+        is_voice = data.get("is_voice", False)
         text = data.get("text", "").strip()
         
+        # [수정] role 정보를 data에서 가져오거나, 없으면 기본값 사용
+        # ws.role 대신 data['role']을 사용해야 음성 인식 시 학생 role이 유지됨
+        sender_role = data.get("role", ws.role) 
+
+        logging.info(f"chat data : {data}")
+
         if not text: return
         
         # 번역 대상 언어 목록 구성
@@ -134,6 +141,8 @@ async def ws_handler(request: web.Request):
             if info.get("lang"):
                 translate_targets.add(info["lang"])
         
+        logging.info(f"채팅방 참가 언어 : {translate_targets}")
+
         # 4. 자기 언어는 제외
         if sender_lang in translate_targets:
             translate_targets.remove(sender_lang)
@@ -158,20 +167,21 @@ async def ws_handler(request: web.Request):
                     translations[lang_code] = "(번역 실패)"
                 else:
                     translations[lang_code] = results[i]
-
-        logging.info(f"[{log_id}] 채팅 번역 완료: {translations}")
-        
+       
         broadcast_payload = json.dumps({
             "type": "chat_broadcast",
             "sender": {
-                "client_id": ws.client_id, # [추가] 고유 ID 포함 (프론트에서 본인 식별용으로 사용 가능)
+                "client_id": data.get("client_id", ws.client_id), # client_id도 data에서 우선 가져옴
                 "nickname": sender_nick,
                 "lang": sender_lang,
-                "role": ws.role
+                "role": sender_role # [수정] ws.role 대신 sender_role 사용
             },
             "original_text": text,
-            "translations": translations
+            "translations": translations,
+            "is_voice" : is_voice
         }, ensure_ascii=False)
+
+        logging.info(f"[{log_id}] 채팅 번역 전송 : {broadcast_payload}")
 
         for client in room.clients:
             if not client.closed:
@@ -243,9 +253,13 @@ async def ws_handler(request: web.Request):
             msg = await ws.receive()
             
             if msg.type == web.WSMsgType.BINARY: 
-                # 교수가 보낸 오디오만 처리
+                # 교수가 보낸 오디오
                 if ws.role == 'professor':
                     await audio_queue.put(msg.data[4:])
+                
+                # [신규] 학생이 보낸 오디오 (발언권이 있는 경우)
+                elif ws.role == 'student' and hasattr(ws, 'audio_queue'):
+                    await ws.audio_queue.put(msg.data[4:])
             
             elif msg.type == web.WSMsgType.TEXT:
                 data = json.loads(msg.data)
@@ -279,6 +293,7 @@ async def ws_handler(request: web.Request):
                 elif msg_type == "join_new_viewer":
                     ws.role = 'student'
                     room.students.add(ws)
+                    await send_json({"type": "your_id", "data": ws.client_id})
                     await send_json({"type": "config", "data": room.config})
                     await broadcast_session_status()
                     
@@ -358,7 +373,128 @@ async def ws_handler(request: web.Request):
                                 asyncio.create_task(prof_ws.send_str(notification_payload))
 
                 elif msg_type == "chat_message":
-                    await handle_chat_message(data)             
+                    # [수정] role 정보 추가
+                    data['role'] = ws.role 
+                    data['client_id'] = ws.client_id
+                    
+                    logging.info(f"채팅 메세지 전송 : {data}")
+                    await handle_chat_message(data)
+
+                elif msg_type == "voice_req":
+                    # [신규] 1. 학생 -> 서버: 발언권 요청
+                    nickname = data.get("nickname", "Unknown")
+                    # 교수들에게 알림 전송
+                    noti_payload = json.dumps({
+                        "type": "voice_req_noti",
+                        "nickname": nickname,
+                        "client_id": ws.client_id  # 학생의 고유 ID 전달
+                    }, ensure_ascii=False)
+                    
+                    for prof_ws in room.professors:
+                        if not prof_ws.closed:
+                            asyncio.create_task(prof_ws.send_str(noti_payload))
+                    
+                    logging.info(f"[{log_id}] 학생({nickname})이 발언권 요청함.")
+
+                elif msg_type == "voice_permission_grant":
+                    # [신규] 2. 교수 -> 서버: 발언권 승인 (수락 버튼 클릭)
+                    target_client_id = data.get("target_client_id")
+                    
+                    # 해당 학생 찾기
+                    target_student = None
+                    for student_ws in room.students:
+                        if getattr(student_ws, 'client_id', None) == target_client_id:
+                            target_student = student_ws
+                            break
+                    
+                    if target_student and not target_student.closed:
+                        # 학생용 큐 생성 및 태스크 시작
+                        target_student.audio_queue = asyncio.Queue()
+                        
+                        # 유저 정보 가져오기
+                        user_info = room.chat_users.get(target_client_id, {})
+                        
+                        creds = room.google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS
+
+                        # [수정] 콜백 함수 개선: 중간 결과와 최종 결과 분기 처리
+                        async def student_chat_callback(data):
+                            # data는 이제 {"text": "...", "is_final": bool} 형태임
+                            
+                            text_content = data.get("text", "").strip()
+                            is_final = data.get("is_final", False)
+
+                            if not text_content: return
+
+                            logging.info(f"[{log_id}] student chat callback data : {data}")
+
+                            if is_final:
+                                # [최종 결과] -> 번역 및 전체 브로드캐스트
+                                # data에 이미 nickname, lang 등 정보가 다 들어있으므로 그대로 사용 가능하지만,
+                                # role과 client_id는 확실하게 채워주는 것이 좋음.
+                                
+                                # handle_chat_message는 client_id를 data에서 가져오도록 수정되어 있어야 함
+                                # data['client_id'] = target_client_id  <-- stt_processor에서 안 넣었으므로 여기서 추가
+                                data['client_id'] = target_client_id
+                                data['role'] = 'student' 
+                                    
+                                await handle_chat_message(data)
+                            else:
+                                # [중간 결과] -> 해당 학생에게만 전송 (UI 표시용)
+                                interim_payload = json.dumps({
+                                    "type": "voice_interim",
+                                    "text": text_content
+                                }, ensure_ascii=False)
+                                
+                                if not target_student.closed:
+                                    await target_student.send_str(interim_payload)
+
+                        # processor 실행
+                        asyncio.create_task(student_stream_processor(
+                            target_student, 
+                            target_student.audio_queue, 
+                            student_chat_callback, # 수정된 콜백 전달
+                            user_info,
+                            creds
+                        ))
+
+                        logging.info(f"[{log_id}] STT 콜백 생성 {target_client_id} \r\n {user_info}")
+
+                        await target_student.send_str(json.dumps({"type": "voice_permitted"}))
+                        logging.info(f"[{log_id}] 학생({target_client_id})에게 발언권 승인.")
+                    else:
+                        # 학생이 나갔거나 못 찾음 -> 교수에게 실패 알림 (선택 사항)
+                        pass
+                
+                elif msg_type == "voice_permission_revoke":
+                    # [신규] 3. 교수 -> 서버: 발언권 회수 (종료 버튼 클릭)
+                    target_client_id = data.get("target_client_id")
+                    
+                    # 해당 학생 찾기
+                    target_student = None
+                    for student_ws in room.students:
+                        if getattr(student_ws, 'client_id', None) == target_client_id:
+                            target_student = student_ws
+                            break
+                    
+                    if target_student and not target_student.closed:
+                        # 학생에게 회수 메시지 전송
+                        await target_student.send_str(json.dumps({"type": "voice_revoked"}))
+                        logging.info(f"[{log_id}] 학생({target_client_id}) 발언권 회수.")            
+                
+                elif msg_type == "voice_req_cancel":
+                    # [신규] 학생이 발언 요청 취소 또는 발언 종료 시
+                    # 교수들에게 알림 전송
+                    noti_payload = json.dumps({
+                        "type": "voice_req_cancel_noti",
+                        "client_id": ws.client_id,
+                        "nickname": room.chat_users.get(ws.client_id, {}).get('nickname', 'Unknown')
+                    }, ensure_ascii=False)
+                    
+                    for prof_ws in room.professors:
+                        if not prof_ws.closed:
+                            asyncio.create_task(prof_ws.send_str(noti_payload))
+                    
+                    logging.info(f"[{log_id}] 학생이 발언 취소/종료함.")
 
             elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED): break
     except Exception as e:
