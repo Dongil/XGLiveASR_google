@@ -92,6 +92,7 @@ async def ws_handler(request: web.Request):
     client_count = len(room.clients)
     log_id = f"{user_id} ({client_count})"
     logging.info(f"[{log_id}] 클라이언트 연결됨. ID: {ws.client_id}")
+    logging.info(f"[{log_id}] config -> {room.config}")
 
     audio_queue = asyncio.Queue()
   
@@ -309,8 +310,11 @@ async def ws_handler(request: web.Request):
                 elif msg_type == "save_config":
                     if ws.role == 'professor':
                         config_to_save = data.get("options", {})
-                        if save_user_config(user_id, config_to_save):
-                            deep_update(room.config, config_to_save)
+                        
+                        deep_update(room.config, config_to_save)
+
+                        if save_user_config(user_id, room.config):
+                            
                             await send_json({"type": "ack", "text": "saved."})
                             
                             update_payload = json.dumps({
