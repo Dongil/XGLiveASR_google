@@ -3,8 +3,8 @@
 import asyncio
 import logging
 import copy
+from typing import Union, Dict
 from google.cloud import speech
-# [추가] google 인증 관련 모듈 임포트
 from google.oauth2 import service_account
 import kss
 from config import SAMPLE_RATE
@@ -19,13 +19,25 @@ def map_lang_code_to_google(lang):
     }
     return mapping.get(lang, 'en-US')
 
-# --- [수정] google_creds_path 인자 추가 ---
-async def google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path: str | None):
+# [신규] 헬퍼 함수: Creds가 Dict인지 Path인지 확인하여 Credentials 생성
+def get_google_credentials(creds: Union[str, Dict, None]):
+    if not creds:
+        return None
+    
+    if isinstance(creds, dict):
+        # Dict인 경우 (DB에서 로드한 경우)
+        return service_account.Credentials.from_service_account_info(creds)
+    elif isinstance(creds, str):
+        # String인 경우 (파일 경로인 경우 - 기본 환경 변수)
+        return service_account.Credentials.from_service_account_file(creds)
+    return None
+
+# [수정] 인자 이름 변경: google_creds_path -> google_creds (타입도 변경)
+async def google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds: Union[str, Dict, None]):
     """Google STT 스트림을 처리하고 결과를 브로드캐스팅하는 코어 로직"""
-    # --- [수정] credentials 인자를 사용하여 클라이언트 생성 ---
-    credentials = None
-    if google_creds_path:
-        credentials = service_account.Credentials.from_service_account_file(google_creds_path)
+    
+    # [수정] 헬퍼 함수를 통해 credentials 생성
+    credentials = get_google_credentials(google_creds)
 
     client = speech.SpeechAsyncClient(credentials=credentials)
     
@@ -71,7 +83,7 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
                     if ws.closed: 
                         break
 
-        logging.info(f"[{log_id}] [STT] Google STT 스트림 시작 (발화 단위 모드).")
+        logging.debug(f"[{log_id}] [STT] Google STT 스트림 시작 (발화 단위 모드).")
         stream = await client.streaming_recognize(requests=audio_stream_generator())
         
         async for response in stream:
@@ -123,17 +135,15 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
                 await send_json_func({"type": "stt_interim", "text": ""})
 
     finally:
-        logging.info(f"[{log_id}] [STT] Google STT 스트림 종료.")
+        logging.debug(f"[{log_id}] [STT] Google STT 스트림 종료.")
         if utterance_unstable_buffer.strip():
             final_sentence = utterance_unstable_buffer.strip()
             logging.info(f"[{log_id}] [STT] 스트림 종료 후 남은 버퍼 처리: \"{final_sentence}\"")
             await broadcast_func(final_sentence)
 
 # [신규] 학생 전용 STT 처리 함수
-async def student_stream_processor(student_ws, student_queue, chat_handler_func, user_info, google_creds_path):
-    credentials = None
-    if google_creds_path:
-        credentials = service_account.Credentials.from_service_account_file(google_creds_path)
+async def student_stream_processor(student_ws, student_queue, chat_handler_func, user_info, google_creds: Union[str, Dict, None]):
+    credentials = credentials = get_google_credentials(google_creds)
     
     client = speech.SpeechAsyncClient(credentials=credentials)
     
@@ -186,24 +196,26 @@ async def student_stream_processor(student_ws, student_queue, chat_handler_func,
     finally:
         logging.info(f"[Student STT] 스트림 종료")
 
-# --- [수정] google_creds_path 인자 추가 및 전달 ---
-async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path: str | None):
+# [수정] 인자 이름 변경: google_creds_path -> google_creds
+async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds: Union[str, Dict, None]):
     """STT 프로세서를 관리하고, 연결이 끊겼을 때 재연결을 시도합니다."""
     while not ws.closed:
         try:
-            await google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds_path)
+            await google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds)
         except asyncio.CancelledError:
             break
         except Exception as e:
-            # --- [수정] 에러 메시지 필터링 로직 개선 ---
             error_str = str(e)
+
+            # [수정 3] 타임아웃/시간초과 로그: INFO -> DEBUG
+            # 이 조건문에 걸리는 에러는 '예상된 정상 동작'이므로 DEBUG로 숨깁니다.
             if "Audio Timeout" in error_str:
-                logging.info(f"[{log_id}] [STT] 오디오 입력이 없어 스트림이 타임아웃되었습니다. (정상 동작)")
+                logging.debug(f"[{log_id}] [STT] 오디오 입력이 없어 스트림이 타임아웃되었습니다. (정상 동작)")
             elif "Exceeded maximum allowed stream duration" in error_str:
-                logging.info(f"[{log_id}] [STT] 스트림 최대 시간(5분)이 경과하여 재연결합니다. (정상 동작)")
+                logging.debug(f"[{log_id}] [STT] 스트림 최대 시간(5분)이 경과하여 재연결합니다. (정상 동작)")
             else:
+                # [중요] 그 외의 에러는 진짜 문제일 수 있으므로 ERROR 레벨 유지!
                 logging.error(f"[{log_id}] [STT] 스트림 매니저 오류 발생: {e}")
-            # -----------------------------------------
         
         if ws.closed:
             break

@@ -6,8 +6,7 @@ import logging
 import re
 import uuid
 import os
-import tempfile
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, Union
 
 from aiohttp import web
 
@@ -26,33 +25,33 @@ class Room:
         self.students: Set[web.WebSocketResponse] = set()
         self.config = load_user_config(user_id)
         self.api_keys = None
-        self.google_creds_path = None
-        
-        # [수정] 채팅 참여자 정보 저장 
-        # Key: client_id (UUID), Value: { "nickname": "...", "lang": "...", "role": "..." }
+        self.google_creds = None
         self.chat_users: Dict[str, dict] = {}
 
     async def load_api_keys(self, user_group):
         self.api_keys = await get_api_keys(user_group) if user_group else None
+        
         if self.api_keys and self.api_keys.get('google_credentials'):
             try:
-                fd, path = tempfile.mkstemp(suffix=".json", text=True)
-                with os.fdopen(fd, 'w', encoding='utf-8') as tmp:
-                    tmp.write(self.api_keys['google_credentials'])
-                self.google_creds_path = path
-                logging.info(f"[{self.user_id}] Google Creds 생성: {path}")
+                # DB에 있는 JSON 문자열을 파싱하여 메모리에 Dict로 저장
+                creds_str = self.api_keys['google_credentials']
+                if isinstance(creds_str, str):
+                    self.google_creds = json.loads(creds_str)
+                elif isinstance(creds_str, dict):
+                    self.google_creds = creds_str
+                    
+                logging.info(f"[{self.user_id}] Google Creds 메모리 로드 완료")
             except Exception as e:
-                logging.error(f"[{self.user_id}] Google Creds 생성 실패: {e}")
+                logging.error(f"[{self.user_id}] Google Creds 파싱 실패: {e}")
+                self.google_creds = None
 
     def cleanup(self):
-        if self.google_creds_path:
-            try: os.remove(self.google_creds_path)
-            except OSError: pass
+        pass
 
 # 전역 Room 관리 딕셔너리
 ROOMS: Dict[str, Room] = {}
 
-def get_translator_instance(engine_name, api_keys, google_creds_path):
+def get_translator_instance(engine_name, api_keys, google_creds):
     if engine_name == 'deepl':
         key = (api_keys or {}).get('deepl_key') or config.DEEPL_API_KEY
         return DeepLTranslator(key)
@@ -61,9 +60,11 @@ def get_translator_instance(engine_name, api_keys, google_creds_path):
         nsecret = (api_keys or {}).get('naver_secret') or config.NAVER_CLIENT_SECRET
         return PapagoTranslator(nid, nsecret)
     elif engine_name == 'google':
-        # GoogleTranslator 클래스는 credentials_path 인자를 받도록 수정되어 있어야 합니다.
-        if google_creds_path:
-            return GoogleTranslator(credentials_path=google_creds_path)
+        # [주의] GoogleTranslator 클래스도 credentials_path 대신 dict를 받을 수 있게 수정되었거나,
+        # 라이브러리가 스마트하게 처리해야 합니다.
+        # 여기서는 google_creds(dict 혹은 str)를 그대로 넘깁니다.
+        if google_creds:
+            return GoogleTranslator(credentials=google_creds) 
     return None
 
 async def ws_handler(request: web.Request):
@@ -148,9 +149,9 @@ async def ws_handler(request: web.Request):
             translate_targets.remove(sender_lang)
 
         # 모든 언어에 대해 Google 번역기 사용 (가장 범용적)
-        creds = room.google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS
+        creds = room.google_creds or config.GOOGLE_APPLICATION_CREDENTIALS
         translator = get_translator_instance("google", room.api_keys, creds)
-        
+
         translations = {}
         tasks = []
 
@@ -209,13 +210,15 @@ async def ws_handler(request: web.Request):
         translations = {}
         tasks = []
         
-        creds = room.google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS
+        # [수정] path 대신 creds 객체 사용
+        creds = room.google_creds or config.GOOGLE_APPLICATION_CREDENTIALS
 
         for lang in target_langs:
             engine_name = lang_engine_map.get(lang)
             if not engine_name: continue
 
             translator = get_translator_instance(engine_name, room.api_keys, creds)
+
             if translator:
                 tasks.append((lang, translator.translate(sentence, lang, source_lang='ko')))
         
@@ -242,10 +245,11 @@ async def ws_handler(request: web.Request):
     await send_json({"type": "info", "text": "connected."})
     
     # STT 태스크 생성 (공유된 config 사용)
+    # [수정] google_stream_manager 호출 시 path 대신 creds 전달
     google_task = asyncio.create_task(google_stream_manager(
         ws, log_id, room.config, audio_queue, 
         broadcast_sentence_with_translation, send_json,
-        room.google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS
+        room.google_creds or config.GOOGLE_APPLICATION_CREDENTIALS 
     ))
 
     try:
@@ -414,7 +418,7 @@ async def ws_handler(request: web.Request):
                         # 유저 정보 가져오기
                         user_info = room.chat_users.get(target_client_id, {})
                         
-                        creds = room.google_creds_path or config.GOOGLE_APPLICATION_CREDENTIALS
+                        creds = room.google_creds or config.GOOGLE_APPLICATION_CREDENTIALS
 
                         # [수정] 콜백 함수 개선: 중간 결과와 최종 결과 분기 처리
                         async def student_chat_callback(data):

@@ -4,10 +4,11 @@ import asyncio
 import logging
 import html
 from abc import ABC, abstractmethod
+from typing import Union, Dict
 
 import aiohttp
 import deepl
-# [추가] google 인증 관련 모듈 임포트
+from google.cloud import translate_v2 as translate
 from google.oauth2 import service_account
 
 class Translator(ABC):
@@ -52,16 +53,21 @@ class PapagoTranslator(Translator):
         except Exception as e: logging.error(f"[Translate] Papago 번역 중 예외 발생 ({target_lang}): {e}"); return f"[Papago {target_lang} 번역 실패]"
 
 class GoogleTranslator(Translator):
-    def __init__(self, credentials_path: str | None = None):
+    def __init__(self, credentials: Union[str, Dict, None] = None):
         try:
-            from google.cloud import translate_v2 as translate
+            creds_obj = None
             
-            credentials = None
-            if credentials_path:
-                credentials = service_account.Credentials.from_service_account_file(credentials_path)
-
-            # credentials 인자를 사용하여 클라이언트 생성
-            self.client = translate.Client(credentials=credentials)            
+            # [수정] credentials 타입에 따라 분기 처리
+            if credentials:
+                if isinstance(credentials, dict):
+                    # 딕셔너리인 경우 (메모리 로드)
+                    creds_obj = service_account.Credentials.from_service_account_info(credentials)
+                elif isinstance(credentials, str):
+                    # 문자열인 경우 (파일 경로)
+                    creds_obj = service_account.Credentials.from_service_account_file(credentials)
+            
+            # credentials 객체를 사용하여 클라이언트 생성
+            self.client = translate.Client(credentials=creds_obj)            
         except Exception as e: raise ValueError(f"Google Translate 클라이언트 초기화 실패: {e}.")
         self.lang_map = {"en": "en", "ja": "ja", "zh": "zh-CN", "vi": "vi", "id": "id", "th": "th", "mn": "mn", "uz": "uz", "tr": "tr", "de": "de", "it": "it", "fr": "fr", "es": "es", "ru": "ru", "pt": "pt", "ko": "KO"}
     
@@ -69,7 +75,7 @@ class GoogleTranslator(Translator):
         if not text or target_lang not in self.lang_map: return ""        
         try:
             loop = asyncio.get_event_loop()
-            # [수정] source_language 인자 사용 (None이면 Google이 자동 감지)
+            # source_language 인자 사용 (None이면 Google이 자동 감지)
             result = await loop.run_in_executor(None, lambda: self.client.translate(text, target_language=self.lang_map[target_lang], source_language=source_lang))
             return html.unescape(result['translatedText'])
         except Exception as e: 
