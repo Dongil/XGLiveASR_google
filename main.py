@@ -18,6 +18,9 @@ from db_manager import init_db_pool, close_db_pool  # [추가]
 setup_logging()
 logging.info("--- 서버 초기화 시작: 콘솔 및 파일 로깅 활성화 ---")
 
+# [추가] DeepL 라이브러리의 불필요한 INFO 로그 숨기기 (WARNING 이상만 출력)
+logging.getLogger('deepl').setLevel(logging.WARNING) 
+
 # GOOGLE_APPLICATION_CREDENTIALS 환경 변수 확인 로그
 if not config.GOOGLE_APPLICATION_CREDENTIALS:
     logging.warning("[Config] 기본 GOOGLE_APPLICATION_CREDENTIALS 환경 변수가 설정되지 않았습니다.")

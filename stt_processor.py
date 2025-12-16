@@ -32,12 +32,9 @@ def get_google_credentials(creds: Union[str, Dict, None]):
         return service_account.Credentials.from_service_account_file(creds)
     return None
 
-# [수정] 인자 이름 변경: google_creds_path -> google_creds (타입도 변경)
-async def google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds: Union[str, Dict, None]):
+# 1. [교수용] 복잡한 로직 (KSS, 설정 적용, Broadcast)
+async def google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, credentials):
     """Google STT 스트림을 처리하고 결과를 브로드캐스팅하는 코어 로직"""
-    
-    # [수정] 헬퍼 함수를 통해 credentials 생성
-    credentials = get_google_credentials(google_creds)
 
     client = speech.SpeechAsyncClient(credentials=credentials)
     
@@ -93,6 +90,9 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
             result = response.results[0]
             transcript = result.alternatives[0].transcript
 
+            # [추가 권장] 내용이 없으면 건너뛰기
+            if not transcript: continue 
+            
             if not result.is_final:
                 unprocessed_part = transcript
                 if utterance_stable_transcript:
@@ -141,10 +141,8 @@ async def google_stream_processor(ws, log_id, client_config, audio_queue, broadc
             logging.info(f"[{log_id}] [STT] 스트림 종료 후 남은 버퍼 처리: \"{final_sentence}\"")
             await broadcast_func(final_sentence)
 
-# [신규] 학생 전용 STT 처리 함수
-async def student_stream_processor(student_ws, student_queue, chat_handler_func, user_info, google_creds: Union[str, Dict, None]):
-    credentials = credentials = get_google_credentials(google_creds)
-    
+# 2. [학생용] 단순 로직 (채팅 전송용)
+async def student_stream_processor(ws, log_id, audio_queue, chat_handler_func, user_info, credentials):
     client = speech.SpeechAsyncClient(credentials=credentials)
     
     student_lang = user_info.get('lang', 'en')
@@ -161,7 +159,7 @@ async def student_stream_processor(student_ws, student_queue, chat_handler_func,
         yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
         while True:
             try:
-                chunk = await asyncio.wait_for(student_queue.get(), timeout=5.0)
+                chunk = await asyncio.wait_for(audio_queue.get(), timeout=5.0)
                 if chunk is None: break
                 yield speech.StreamingRecognizeRequest(audio_content=chunk)
             except asyncio.TimeoutError:
@@ -170,6 +168,7 @@ async def student_stream_processor(student_ws, student_queue, chat_handler_func,
                 break
 
     try:
+        logging.debug(f"[{log_id}] [Student STT] 스트림 시작 ({stt_lang_code})")
         stream = await client.streaming_recognize(requests=request_generator())
         
         async for response in stream:
@@ -180,6 +179,7 @@ async def student_stream_processor(student_ws, student_queue, chat_handler_func,
             
             transcript = result.alternatives[0].transcript
             
+            # 콜백 데이터 구성
             chat_data = {
                 "nickname": user_info.get("nickname", "Student"),
                 "lang": student_lang,
@@ -197,11 +197,23 @@ async def student_stream_processor(student_ws, student_queue, chat_handler_func,
         logging.info(f"[Student STT] 스트림 종료")
 
 # [수정] 인자 이름 변경: google_creds_path -> google_creds
-async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds: Union[str, Dict, None]):
+async def google_stream_manager(
+    mode, # 'professor' | 'student'
+    ws, log_id, audio_queue, google_creds: Union[str, Dict, None],
+    # 교수용 인자
+    client_config=None, broadcast_func=None, send_json_func=None,
+    # 학생용 인자
+    user_info=None, chat_handler_func=None):
+
     """STT 프로세서를 관리하고, 연결이 끊겼을 때 재연결을 시도합니다."""
+    credentials = get_google_credentials(google_creds)
+
     while not ws.closed:
         try:
-            await google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, google_creds)
+            if mode == 'professor':
+                await google_stream_processor(ws, log_id, client_config, audio_queue, broadcast_func, send_json_func, credentials)
+            elif mode == 'student':
+                await student_stream_processor(ws, log_id, audio_queue, chat_handler_func, user_info, credentials)
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -220,5 +232,5 @@ async def google_stream_manager(ws, log_id, client_config, audio_queue, broadcas
         if ws.closed:
             break
         
-        logging.warning(f"[{log_id}] [STT] 스트림 재연결 시도...")
+        logging.debug(f"[{log_id}] [STT] 스트림 재연결 시도...")
         await asyncio.sleep(0.1)

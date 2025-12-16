@@ -38,7 +38,7 @@ class PapagoTranslator(Translator):
             raise ValueError("Papago Client ID 또는 Secret이 설정되지 않았습니다.")
         self.url = "https://papago.apigw.ntruss.com/nmt/v1/translation"
         self.headers = {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-NCP-APIGW-API-KEY-ID": client_id, "X-NCP-APIGW-API-KEY": client_secret}
-        self.lang_map = {"en": "en", "ja": "ja", "zh": "zh-CN", "vi": "vi", "id": "id", "th": "th", "de": "de", "it": "it", "fr": "fr", "es" : "es", "ru": "ru", "ko": "KO"}
+        self.lang_map = {"en": "en", "ja": "ja", "zh": "zh-CN", "vi": "vi", "id": "id", "th": "th", "de": "de", "it": "it", "fr": "fr", "es" : "es", "ru": "ru", "ko": "ko"}
     
     async def translate(self, text: str, target_lang: str,source_lang: str = None ) -> str:
         if not text or target_lang not in self.lang_map: return ""

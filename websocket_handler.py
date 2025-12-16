@@ -12,7 +12,7 @@ from aiohttp import web
 
 import config
 from config_manager import load_user_config, save_user_config, deep_update
-from stt_processor import google_stream_manager, student_stream_processor
+from stt_processor import google_stream_manager
 from translators import DeepLTranslator, PapagoTranslator, GoogleTranslator
 from db_manager import get_api_keys
 
@@ -74,6 +74,10 @@ async def ws_handler(request: web.Request):
     # [신규] 연결마다 고유 식별자(Client ID) 생성
     ws.client_id = str(uuid.uuid4())
     ws.role = 'unknown' # 초기 역할
+    ws.stt_task = None  # STT 테스크 관린
+
+    # 공용 큐 (교수용 혹은 학생용으로 할당됨)
+    audio_queue = asyncio.Queue()
 
     user_id_raw = request.query.get("id", "")
     user_id = re.sub(r'[^a-zA-Z0-9_\-]', '', user_id_raw) if user_id_raw else f"anonymous_{str(uuid.uuid4().hex)[:8]}"
@@ -92,9 +96,6 @@ async def ws_handler(request: web.Request):
     client_count = len(room.clients)
     log_id = f"{user_id} ({client_count})"
     logging.info(f"[{log_id}] 클라이언트 연결됨. ID: {ws.client_id}")
-    logging.info(f"[{log_id}] config -> {room.config}")
-
-    audio_queue = asyncio.Queue()
   
     async def send_json(data):
         if not ws.closed:
@@ -242,26 +243,17 @@ async def ws_handler(request: web.Request):
         if trans_tasks: await asyncio.gather(*trans_tasks, return_exceptions=True)
         
         logging.info(f"[{log_id}] [Broadcast] STT & Trans 완료")
-
-    await send_json({"type": "info", "text": "connected."})
     
-    # STT 태스크 생성 (공유된 config 사용)
-    # [수정] google_stream_manager 호출 시 path 대신 creds 전달
-    google_task = asyncio.create_task(google_stream_manager(
-        ws, log_id, room.config, audio_queue, 
-        broadcast_sentence_with_translation, send_json,
-        room.google_creds or config.GOOGLE_APPLICATION_CREDENTIALS 
-    ))
-
     try:
+        await send_json({"type": "info", "text": "connected."})
+
         while not ws.closed:
             msg = await ws.receive()
             
             if msg.type == web.WSMsgType.BINARY: 
                 # 교수가 보낸 오디오
                 if ws.role == 'professor':
-                    await audio_queue.put(msg.data[4:])
-                
+                    await audio_queue.put(msg.data[4:])                
                 # [신규] 학생이 보낸 오디오 (발언권이 있는 경우)
                 elif ws.role == 'student' and hasattr(ws, 'audio_queue'):
                     await ws.audio_queue.put(msg.data[4:])
@@ -271,8 +263,22 @@ async def ws_handler(request: web.Request):
                 msg_type = data.get("type", "unknown")
                 
                 if msg_type == "get_config": 
+                    # 1. 교수 역할 확정 및 STT 시작
                     ws.role = 'professor'
                     room.professors.add(ws)
+
+                    # [교수용 STT 태스크 시작]
+                    if not ws.stt_task:
+                        ws.stt_task = asyncio.create_task(google_stream_manager(
+                            mode='professor',
+                            ws=ws, log_id=log_id, audio_queue=audio_queue,
+                            google_creds=room.google_creds or config.GOOGLE_APPLICATION_CREDENTIALS,
+                            client_config=room.config,
+                            broadcast_func=broadcast_sentence_with_translation,
+                            send_json_func=send_json
+                        ))
+                        logging.info(f"[{log_id}] 교수 STT 시작")
+
                     await send_json({"type": "config", "data": room.config})
                     await broadcast_session_status()
 
@@ -298,14 +304,11 @@ async def ws_handler(request: web.Request):
                 elif msg_type == "join_new_viewer":
                     ws.role = 'student'
                     room.students.add(ws)
+                    logging.info(f"[{log_id}] 학생 뷰어 시작")
+
                     await send_json({"type": "your_id", "data": ws.client_id})
                     await send_json({"type": "config", "data": room.config})
                     await broadcast_session_status()
-                    
-                    # 학생 접속 시, 현재 설정 상태를 동기화하기 위한 이벤트 전송
-                    status_payload = json.dumps({ "type": msg_type }, ensure_ascii=False)
-                    for client in room.clients:
-                        if client is not ws: asyncio.create_task(client.send_str(status_payload)) 
 
                 elif msg_type == "save_config":
                     if ws.role == 'professor':
@@ -421,76 +424,69 @@ async def ws_handler(request: web.Request):
                         
                         # 유저 정보 가져오기
                         user_info = room.chat_users.get(target_client_id, {})
-                        
-                        creds = room.google_creds or config.GOOGLE_APPLICATION_CREDENTIALS
 
-                        # [수정] 콜백 함수 개선: 중간 결과와 최종 결과 분기 처리
+                        # 학생용 콜백 (클로저)
                         async def student_chat_callback(data):
-                            # data는 이제 {"text": "...", "is_final": bool} 형태임
+                            # data: {text, is_final, ...}
+                            # is_final 여부에 따라 분기
+
+                            # [수정] 텍스트가 비어있으면 무시 (로그 도배 방지)
+                            if not data.get("text", "").strip():
+                                return
                             
-                            text_content = data.get("text", "").strip()
-                            is_final = data.get("is_final", False)
-
-                            if not text_content: return
-
-                            logging.info(f"[{log_id}] student chat callback data : {data}")
-
-                            if is_final:
-                                # [최종 결과] -> 번역 및 전체 브로드캐스트
-                                # data에 이미 nickname, lang 등 정보가 다 들어있으므로 그대로 사용 가능하지만,
-                                # role과 client_id는 확실하게 채워주는 것이 좋음.
-                                
-                                # handle_chat_message는 client_id를 data에서 가져오도록 수정되어 있어야 함
-                                # data['client_id'] = target_client_id  <-- stt_processor에서 안 넣었으므로 여기서 추가
+                            if data.get('is_final'):
                                 data['client_id'] = target_client_id
-                                data['role'] = 'student' 
-                                    
+                                data['role'] = 'student'
                                 await handle_chat_message(data)
                             else:
-                                # [중간 결과] -> 해당 학생에게만 전송 (UI 표시용)
+                                # 중간 결과 전송
                                 interim_payload = json.dumps({
                                     "type": "voice_interim",
-                                    "text": text_content
+                                    "text": data.get("text")
                                 }, ensure_ascii=False)
-                                
                                 if not target_student.closed:
                                     await target_student.send_str(interim_payload)
 
-                        # processor 실행
-                        asyncio.create_task(student_stream_processor(
-                            target_student, 
-                            target_student.audio_queue, 
-                            student_chat_callback, # 수정된 콜백 전달
-                            user_info,
-                            creds
+                        # [학생용 STT 태스크 시작]
+                        target_student.stt_task = asyncio.create_task(google_stream_manager(
+                            mode='student',
+                            ws=target_student, 
+                            log_id=f"Student-{target_client_id}",
+                            audio_queue=target_student.audio_queue,
+                            google_creds=room.google_creds or config.GOOGLE_APPLICATION_CREDENTIALS,
+                            user_info=user_info,
+                            chat_handler_func=student_chat_callback
                         ))
 
-                        logging.info(f"[{log_id}] STT 콜백 생성 {target_client_id} \r\n {user_info}")
-
                         await target_student.send_str(json.dumps({"type": "voice_permitted"}))
-                        logging.info(f"[{log_id}] 학생({target_client_id})에게 발언권 승인.")
+                        logging.info(f"[{log_id}] 학생({target_client_id}) 발언 승인 및 STT 시작")
                     else:
                         # 학생이 나갔거나 못 찾음 -> 교수에게 실패 알림 (선택 사항)
                         pass
                 
                 elif msg_type == "voice_permission_revoke":
-                    # [신규] 3. 교수 -> 서버: 발언권 회수 (종료 버튼 클릭)
+                    # 4. 학생 발언권 회수 -> 학생 STT 중지
                     target_client_id = data.get("target_client_id")
+                    target_student = next((s for s in room.students if getattr(s, 'client_id', None) == target_client_id), None)
                     
-                    # 해당 학생 찾기
-                    target_student = None
-                    for student_ws in room.students:
-                        if getattr(student_ws, 'client_id', None) == target_client_id:
-                            target_student = student_ws
-                            break
-                    
-                    if target_student and not target_student.closed:
-                        # 학생에게 회수 메시지 전송
+                    if target_student:
+                        if hasattr(target_student, 'stt_task') and target_student.stt_task:
+                            target_student.stt_task.cancel()
+                            try: await target_student.stt_task
+                            except asyncio.CancelledError: pass
+                            target_student.stt_task = None
+                            
                         await target_student.send_str(json.dumps({"type": "voice_revoked"}))
-                        logging.info(f"[{log_id}] 학생({target_client_id}) 발언권 회수.")            
+                        logging.info(f"[{log_id}] 학생({target_client_id}) 발언 회수 및 STT 중지")        
                 
                 elif msg_type == "voice_req_cancel":
                     # [신규] 학생이 발언 요청 취소 또는 발언 종료 시
+                    # 본인(ws) 태스크 정리
+                    if ws.role == 'student' and ws.stt_task:
+                        ws.stt_task.cancel()
+                        ws.stt_task = None
+                        logging.info(f"[{log_id}] 학생 스스로 STT 종료")
+                    
                     # 교수들에게 알림 전송
                     noti_payload = json.dumps({
                         "type": "voice_req_cancel_noti",
@@ -501,8 +497,6 @@ async def ws_handler(request: web.Request):
                     for prof_ws in room.professors:
                         if not prof_ws.closed:
                             asyncio.create_task(prof_ws.send_str(noti_payload))
-                    
-                    logging.info(f"[{log_id}] 학생이 발언 취소/종료함.")
 
             elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSING, web.WSMsgType.CLOSED): break
     except Exception as e:
@@ -555,9 +549,10 @@ async def ws_handler(request: web.Request):
                     await broadcast_session_status()
                 except Exception: pass
 
-        google_task.cancel()
-        try: await google_task
-        except asyncio.CancelledError: pass
+        if ws.stt_task and not ws.stt_task.done():
+            ws.stt_task.cancel()
+            try: await ws.stt_task
+            except asyncio.CancelledError: pass
 
         if not ws.closed: await ws.close()
     return ws
