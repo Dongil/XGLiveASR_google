@@ -1154,9 +1154,10 @@
             ws.send(JSON.stringify({
                 type: "chat_message",
                 nickname: "교수님",
-                lang: "ko",
-                target_langs : targetLangs,
-                text: text
+                lang: "ko",                
+                text: text,
+                role: "professor",
+                client_id: ""
             }));
             chatInput.value = "";
         }
