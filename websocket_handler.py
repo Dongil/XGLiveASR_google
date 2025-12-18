@@ -240,7 +240,7 @@ async def ws_handler(request: web.Request):
     # =========================================================================
     # [C] 메시지 타입별 핸들러 (Command Handlers)
     # =========================================================================
-    async def cmd_get_config(data):
+    async def cmd_join_lecture(data):
         """교수 초기화 및 STT 시작"""
         ws.role = 'professor'
         room.professors.add(ws)
@@ -269,7 +269,7 @@ async def ws_handler(request: web.Request):
                 "total_chat_users": len(room.chat_users)
             })
 
-    async def cmd_join_new_viewer(data):
+    async def cmd_join_viewer(data):
         """학생 초기화"""
         ws.role = 'student'
         room.students.add(ws)
@@ -421,8 +421,8 @@ async def ws_handler(request: web.Request):
 
     # 핸들러 맵핑
     CMD_HANDLERS = {
-        "get_config": cmd_get_config,
-        "join_new_viewer": cmd_join_new_viewer,
+        "join_lecture": cmd_join_lecture,
+        "join_viewer": cmd_join_viewer,
         "save_config": cmd_save_config,
         "change_translate_langs": cmd_change_translate_langs,
         "request_language_add": cmd_request_language_add,
